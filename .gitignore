@@ -1,0 +1,29 @@
+# Build output
+obj/
+dist/
+*.o
+*.d
+*.dll
+*.so
+*.dylib
+*.a
+*.exe
+
+# Machine-specific toolchain paths
+scripts/local-env.sh
+
+# Local working notes - NOT for publication
+CLAUDE.md
+claudedocs/
+notes-local/
+*.local.md
+
+# Test output (frame dumps, benches, printer BMPs)
+out/
+*.bmp
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

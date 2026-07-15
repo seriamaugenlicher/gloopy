@@ -1,0 +1,11 @@
+# libretro build-bot entry point.
+#
+# The libretro build-bot invokes `make -f Makefile.libretro platform=<x> CC=... CXX=...`
+# and then collects the core as gloopy_libretro.<ext> from the Makefile's own directory
+# (the repo root). The real Makefile defaults its output to dist/ for local work, so this
+# thin wrapper only redirects the output location to the root and then defers entirely to
+# it. Nothing else is overridden — CC/CXX/platform come from the build-bot's command line.
+#
+# Local builds keep using `make` (dist/); CI uses `make -f Makefile.libretro` (root).
+OUTDIR := .
+include Makefile

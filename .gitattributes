@@ -1,0 +1,4 @@
+# Normalize to LF in the repository and in the working tree on every platform.
+# Without this, a Windows clone gets CRLF and the shell scripts break on their
+# shebang line.
+* text=auto eol=lf

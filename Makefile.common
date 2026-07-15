@@ -1,0 +1,31 @@
+INCFLAGS := -I$(CORE_DIR)/src \
+            -I$(CORE_DIR)/libretro-common/include
+
+SOURCES_CXX := \
+	$(CORE_DIR)/libretro.cpp \
+	$(CORE_DIR)/src/common/bswp.cpp \
+	$(CORE_DIR)/src/core/cart.cpp \
+	$(CORE_DIR)/src/core/loopy_io.cpp \
+	$(CORE_DIR)/src/core/memory.cpp \
+	$(CORE_DIR)/src/core/system.cpp \
+	$(CORE_DIR)/src/core/timing.cpp \
+	$(CORE_DIR)/src/core/sh2/sh2.cpp \
+	$(CORE_DIR)/src/core/sh2/sh2_bus.cpp \
+	$(CORE_DIR)/src/core/sh2/sh2_interpreter.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_dmac.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_intc.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_ocpm.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_pfc.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_serial.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_timers.cpp \
+	$(CORE_DIR)/src/expansion/expansion.cpp \
+	$(CORE_DIR)/src/expansion/msm665x/msm665x.cpp \
+	$(CORE_DIR)/src/imgwriter/imgwriter.cpp \
+	$(CORE_DIR)/src/imgwriter/png.cpp \
+	$(CORE_DIR)/src/input/input.cpp \
+	$(CORE_DIR)/src/log/log.cpp \
+	$(CORE_DIR)/src/printer/printer.cpp \
+	$(CORE_DIR)/src/sound/loopysound.cpp \
+	$(CORE_DIR)/src/sound/sound.cpp \
+	$(CORE_DIR)/src/video/render.cpp \
+	$(CORE_DIR)/src/video/video.cpp
