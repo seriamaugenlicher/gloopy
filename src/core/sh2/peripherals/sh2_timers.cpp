@@ -269,6 +269,29 @@ uint8_t read8(uint32_t addr)
 
 uint16_t read16(uint32_t addr)
 {
+	TimerDev dev = get_dev_from_addr(addr);
+
+	Timer* timer = std::get<Timer*>(dev);
+	int reg = std::get<int>(dev);
+
+	if (timer)
+	{
+		switch (reg)
+		{
+		case 0x04:
+			//TCNT is a live free-running counter on the real SH7021; derive it
+			//from the elapsed time so software may poll it (e.g. for a clock)
+			timer->update_counter();
+			return (uint16_t)timer->counter;
+		case 0x06:
+		case 0x08:
+			return (uint16_t)timer->gen_reg[(reg - 0x06) >> 1];
+		default:
+			assert(0);
+			return 0;
+		}
+	}
+
 	assert(0);
 	return 0;
 }
