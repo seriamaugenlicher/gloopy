@@ -73,26 +73,31 @@ A missing or unusable **main** BIOS is fatal, and content will simply fail to lo
 | Loopy | RetroPad |
 | --- | --- |
 | D-Pad | D-Pad |
-| A | A |
-| B | B |
-| C | X |
-| D | Y |
+| A | B |
+| B | A |
+| C | Y |
+| D | X |
 | L | L |
 | R | R |
 | Start | Start |
 
 ### Loopy Mouse
 
-| Loopy Mouse | Your mouse |
-| --- | --- |
-| Move | Move |
-| Left button | Left button |
-| Right button | Right button |
+| Loopy Mouse | Your mouse | Your gamepad |
+| --- | --- | --- |
+| Move | Move | Right stick |
+| Left button | Left button | L2 |
+| Right button | Right button | R2 |
+
+**The right stick and L2/R2 work as a mouse on their own, with no separate frontend device
+switch** — a gamepad alone is enough to play every mouse game. This is on top of, not instead
+of, a real mouse if you have one plugged in.
 
 The mouse and the gamepad share the Loopy's single controller port, so only one of them is
-plugged in at a time — but you can "hot-swap" between them freely while a game is running.
-By default, moving the mouse switches input to the mouse, and pressing a gamepad button
-switches input to the gamepad. See **Input Device** under [Core options](#core-options).
+plugged in at a time — but you can "hot-swap" between them freely while a game is running. By
+default, moving a mouse (real or the right stick) switches input to the mouse, and pressing a
+gamepad button switches input back to the gamepad — L2/R2 don't, since they're mouse buttons.
+See **Input Device** under [Core options](#core-options).
 
 ## Save data
 
