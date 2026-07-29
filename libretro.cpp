@@ -47,7 +47,7 @@ this fork makes, and NOTICES.md for attribution.
 #endif
 
 #define CORE_NAME "Gloopy"
-#define CORE_VERSION "1.0.0" GIT_VERSION
+#define CORE_VERSION "1.0.1" GIT_VERSION
 
 static constexpr int FPS = 60;
 static constexpr int SAMPLE_RATE = Sound::TARGET_SAMPLE_RATE;
