@@ -73,10 +73,10 @@ A missing or unusable **main** BIOS is fatal, and content will simply fail to lo
 | Loopy | RetroPad |
 | --- | --- |
 | D-Pad | D-Pad |
-| A | A |
-| B | B |
-| C | X |
-| D | Y |
+| A | B |
+| B | A |
+| C | Y |
+| D | X |
 | L | L |
 | R | R |
 | Start | Start |
