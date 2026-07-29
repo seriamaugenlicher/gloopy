@@ -17,6 +17,8 @@ CLAUDE.md
 claudedocs/
 notes-local/
 *.local.md
+DEMO.md
+LOOPYMOUSE.md
 
 # Test output (frame dumps, benches, printer BMPs)
 out/
