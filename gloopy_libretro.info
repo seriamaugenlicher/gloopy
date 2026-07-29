@@ -6,7 +6,7 @@ corename = "Gloopy"
 categories = "Emulator"
 license = "GPLv3"
 permissions = ""
-display_version = "1.0.2"
+display_version = "1.0.0"
 
 # Hardware Information
 manufacturer = "Casio"
