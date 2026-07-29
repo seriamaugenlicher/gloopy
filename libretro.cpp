@@ -47,7 +47,7 @@ this fork makes, and NOTICES.md for attribution.
 #endif
 
 #define CORE_NAME "Gloopy"
-#define CORE_VERSION "1.0.3" GIT_VERSION
+#define CORE_VERSION "1.0.4" GIT_VERSION
 
 static constexpr int FPS = 60;
 static constexpr int SAMPLE_RATE = Sound::TARGET_SAMPLE_RATE;
@@ -100,6 +100,14 @@ static InputDevice opt_input_device = INPUT_AUTO;
 
 constexpr static float MOUSE_BASE_SCALE = 0.375f;
 static float opt_mouse_sensitivity = MOUSE_BASE_SCALE;
+
+//Right stick + L2/R2 double as a mouse, so players get pointer control without
+//ever leaving the core's own options (no frontend port/device switch needed).
+//Deadzone filters stick centering drift; max speed is the raw mouse-delta-
+//equivalent contributed per frame at full deflection, before opt_mouse_sensitivity
+//is applied - same units as a real mouse's dx/dy, so it shares that scaling.
+constexpr static int16_t ANALOG_MOUSE_DEADZONE = 6000;
+constexpr static float ANALOG_MOUSE_MAX_SPEED = 12.0f;
 
 //Frameskip. The emulated CPU always runs; only VDP compositing and the frame
 //blit are dropped, so game logic and audio are untouched. 0 = off, otherwise
@@ -197,6 +205,10 @@ static void set_input_descriptors()
 		{0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L, "L"},
 		{0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "R"},
 		{0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Start"},
+		{0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Mouse Left Click"},
+		{0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Mouse Right Click"},
+		{0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X, "Mouse Cursor X"},
+		{0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y, "Mouse Cursor Y"},
 		{0, 0, 0, 0, NULL},
 	};
 
@@ -238,6 +250,21 @@ static int scale_mouse_delta(int raw, float& carry)
 	return whole;
 }
 
+//Converts a right-stick axis into the same raw-delta units a real mouse's dx/dy
+//would use, so it can be added straight into the mouse path and shares its
+//sensitivity scaling and hot-swap detection.
+static int analog_axis_to_raw_mouse_delta(int16_t axis)
+{
+	int magnitude = axis < 0 ? -(int)axis : (int)axis;
+	if (magnitude <= ANALOG_MOUSE_DEADZONE)
+	{
+		return 0;
+	}
+	float normalized = (float)(magnitude - ANALOG_MOUSE_DEADZONE) / (float)(32767 - ANALOG_MOUSE_DEADZONE);
+	int scaled = (int)(normalized * ANALOG_MOUSE_MAX_SPEED);
+	return axis < 0 ? -scaled : scaled;
+}
+
 static void poll_input()
 {
 	input_poll_cb();
@@ -250,6 +277,14 @@ static void poll_input()
 		dy = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
 		mouse_l = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_LEFT) != 0;
 		mouse_r = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_RIGHT) != 0;
+
+		//Right stick + L2/R2 as a built-in virtual mouse (see ANALOG_MOUSE_* above)
+		int16_t stick_x = (int16_t)input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+		int16_t stick_y = (int16_t)input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+		dx += analog_axis_to_raw_mouse_delta(stick_x);
+		dy += analog_axis_to_raw_mouse_delta(stick_y);
+		mouse_l |= input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2) != 0;
+		mouse_r |= input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2) != 0;
 	}
 
 	bool pad_pressed[PAD_MAPPING_COUNT] = {};

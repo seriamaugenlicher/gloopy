@@ -321,8 +321,11 @@ int main(int argc, char** argv)
 	bool mouse_toggle_test = strcmp(mode, "mousetoggle") == 0;
 	bool advance_test = strcmp(mode, "advance") == 0;
 	bool bench_mode = strcmp(mode, "bench") == 0;
+	bool wramtrace_mode = strcmp(mode, "wramtrace") == 0;
 	int bench_warmup = 600;
 	int bench_frames = 3600;
+	int wramtrace_frames = 1800;
+	int wramtrace_interval = 60;
 	{
 		//[warmup_frames] [bench_frames] (bench only) then [key=value ...] in any mode
 		int argi = have_mode ? 6 : 5;
@@ -330,6 +333,11 @@ int main(int argc, char** argv)
 		{
 			if (argi < argc && !strchr(argv[argi], '=')) bench_warmup = atoi(argv[argi++]);
 			if (argi < argc && !strchr(argv[argi], '=')) bench_frames = atoi(argv[argi++]);
+		}
+		if (wramtrace_mode)
+		{
+			if (argi < argc && !strchr(argv[argi], '=')) wramtrace_frames = atoi(argv[argi++]);
+			if (argi < argc && !strchr(argv[argi], '=')) wramtrace_interval = atoi(argv[argi++]);
 		}
 		for (; argi < argc; argi++)
 		{
@@ -421,6 +429,45 @@ int main(int argc, char** argv)
 		printf("[bench] %d frames after %d warmup: %.1f ms total, %.4f ms/frame, %.1f fps equivalent\n",
 			   bench_frames, bench_warmup, ms, ms / bench_frames, bench_frames * 1000.0 / ms);
 
+		p_retro_unload_game();
+		p_retro_deinit();
+		return 0;
+	}
+
+	if (wramtrace_mode)
+	{
+		//Idle-title investigation: run with zero real input (mouse_dx/dy/mouse_left
+		//and pad_start/pad_a all stay false the whole time - the device is whatever
+		//loopy_input_device= was passed as a cli option), printing a wram_crc and
+		//dumping raw WRAM + a screenshot at fixed intervals so two runs (e.g.
+		//controller vs mouse) can be diffed frame-by-frame to find exactly when and
+		//where their machine state first diverges.
+		void* wram_data = p_retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM);
+		size_t wram_size = p_retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+		printf("[wramtrace] wram: %zu bytes, tracing %d frames every %d\n", wram_size, wramtrace_frames,
+			   wramtrace_interval);
+
+		for (int f = 1; f <= wramtrace_frames; f++)
+		{
+			p_retro_run();
+			if (f % wramtrace_interval == 0)
+			{
+				uint32_t crc = crc32_buf(wram_data, wram_size);
+				printf("[wramtrace] frame=%d wram_crc=%08X\n", f, crc);
+
+				char name[MAX_PATH];
+				snprintf(name, sizeof(name), "%s/wram_%05d.bin", out_dir.c_str(), f);
+				std::ofstream wf(name, std::ios::binary);
+				wf.write((const char*)wram_data, (std::streamsize)wram_size);
+
+				if (!last_frame.empty())
+				{
+					snprintf(name, sizeof(name), "%s/frame_%05d.bmp", out_dir.c_str(), f);
+					save_bmp565(name, last_frame.data(), last_w, last_h);
+				}
+			}
+		}
+		printf("[wramtrace] done\n");
 		p_retro_unload_game();
 		p_retro_deinit();
 		return 0;

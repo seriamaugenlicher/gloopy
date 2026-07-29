@@ -1,5 +1,6 @@
 #include <common/wordops.h>
 #include <core/loopy_io.h>
+#include <input/input.h>
 #include <log/log.h>
 
 #include <algorithm>
@@ -97,7 +98,7 @@ uint16_t reg_read16(uint32_t addr)
 		{
 			uint16_t mouse_xreg = state.mouse.counter_x & 0xFFF;
 			state.mouse.counter_x = 0;
-			mouse_xreg |= ((~state.mouse.buttons) & 0x7000);
+			mouse_xreg |= (state.mouse.buttons & (Input::MOUSE_L | Input::MOUSE_R));
 			return mouse_xreg;
 		}
 		return 0;
