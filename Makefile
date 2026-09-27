@@ -77,7 +77,8 @@ else ifneq (,$(findstring android,$(platform)))
 # Windows (native MSYS2/MinGW or cross-compile)
 else ifneq (,$(findstring win,$(platform)))
    TARGET := $(OUTDIR)/$(TARGET_NAME)_libretro.dll
-   SHARED := -shared -static-libgcc -static-libstdc++ -Wl,--no-undefined -Wl,--version-script=link.T
+   # Fully static, or the posix MinGW runtime leaves an import of libwinpthread-1.dll
+   SHARED := -shared -static -Wl,--no-undefined -Wl,--version-script=link.T
    ifneq ($(findstring MINGW,$(shell uname -s))$(findstring MSYS,$(shell uname -s)),)
       CC ?= gcc
       CXX ?= g++
@@ -133,9 +134,12 @@ else
 	$(CXX) $(fpic) $(SHARED) -o $@ $(OBJECTS) $(LDFLAGS)
 endif
 
+# Track header dependencies, so editing a header rebuilds the objects that use it
 $(OBJDIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP -c -o $@ $<
+
+-include $(OBJECTS:.o=.d)
 
 # Only this platform's objects and target; other platforms' builds are untouched
 clean:

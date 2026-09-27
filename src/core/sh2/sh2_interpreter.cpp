@@ -41,6 +41,20 @@ static void handle_jump(uint32_t dst, bool delay_slot)
 {
 	//TODO: raise an exception if this function is called within a delay slot
 
+	//A taken branch costs one slot more than the refill below (SH-1 execution table:
+	//BT/BF 3 states, BRA/BSR/JMP/JSR/RTS 2). For a non-delayed branch on the external
+	//bus the slot is a wasted fetch (3 cycles from ROM); delayed branches keep one
+	//state, which leaves the bus idle, so a read by the instruction just before the
+	//branch costs nothing more. All measured on a console.
+	if (delay_slot && sh2.exec_external && sh2.read_prev_instr)
+	{
+		//the state went to the read
+	}
+	else
+	{
+		sh2.cycles_left -= (!delay_slot && sh2.exec_external) ? sh2.fetch_cycles : 1;
+	}
+
 	sh2.pc = dst;
 	if (delay_slot)
 	{
@@ -49,6 +63,8 @@ static void handle_jump(uint32_t dst, bool delay_slot)
 	else
 	{
 		sh2.pipeline_valid = false;
+		//The fetch thrown away is a bus access all the same (cycle-stealing DMA)
+		sh2.bus_transfers++;
 	}
 }
 
@@ -88,14 +104,42 @@ static void set_control_reg(int index, uint32_t value)
 	}
 }
 
+//The multiplier (MULS.W, MULU.W, MAC.W) accepts a new operation 3 cycles after the
+//last started, with the result in MACH/MACL after 4; earlier issues and reads wait
+constexpr int MUL_ISSUE_CYCLES = 3;
+constexpr int MUL_RESULT_CYCLES = 4;
+
+static void mul_start()
+{
+	int64_t now = cpu_now();
+	if (now < sh2.mul_issue_free)
+	{
+		sh2.cycles_left -= (int32_t)(sh2.mul_issue_free - now);
+		now = sh2.mul_issue_free;
+	}
+	sh2.mul_issue_free = now + MUL_ISSUE_CYCLES;
+	sh2.mul_result_ready = now + MUL_RESULT_CYCLES;
+}
+
+static void mul_result_wait()
+{
+	int64_t now = cpu_now();
+	if (now < sh2.mul_result_ready)
+	{
+		sh2.cycles_left -= (int32_t)(sh2.mul_result_ready - now);
+	}
+}
+
 static uint32_t get_system_reg(int index)
 {
 	sh2.in_nointerrupt_slot = true;
 	switch (index)
 	{
 	case 0:
+		mul_result_wait();
 		return sh2.mach;
 	case 1:
+		mul_result_wait();
 		return sh2.macl;
 	case 2:
 		return sh2.pr;
@@ -569,6 +613,31 @@ static void cmppz(uint16_t instr)
 	SET_T(result);
 }
 
+constexpr int TRAPA_EXTRA_CYCLES = 6;
+constexpr int TAS_EXTRA_CYCLES = 2;
+
+//TRAPA #imm: a software exception through vector imm. The pipeline has already
+//fetched past it, so the return address raise_exception pushes (pc - 2) is the
+//instruction after the TRAPA, which RTE resumes at.
+static void trapa(uint16_t instr)
+{
+	raise_exception(instr & 0xFF);
+	//Internal states beyond its stack writes and vector read (measured)
+	sh2.cycles_left -= TRAPA_EXTRA_CYCLES;
+}
+
+//TAS.B @Rn: T = (byte == 0), then write it back with bit 7 set (a locked
+//read-modify-write)
+static void tas(uint16_t instr)
+{
+	uint32_t reg = (instr >> 8) & 0xF;
+	uint8_t value = Bus::read8(sh2.gpr[reg]);
+	SET_T(value == 0);
+	Bus::write8(sh2.gpr[reg], value | 0x80);
+	//Two states more than its accesses (measured)
+	sh2.cycles_left -= TAS_EXTRA_CYCLES;
+}
+
 static void cmpstr(uint16_t instr)
 {
 	uint32_t reg1 = (instr >> 4) & 0xF;
@@ -689,6 +758,7 @@ static void macw(uint16_t instr)
 	int32_t value1 = (int32_t)(int16_t)Bus::read16(sh2.gpr[reg1]);
 	int32_t value2 = (int32_t)(int16_t)Bus::read16(sh2.gpr[reg2]);
 
+	mul_start();
 	bool saturate = GET_S();
 	assert(!saturate);
 
@@ -714,6 +784,7 @@ static void macw(uint16_t instr)
 
 static void mulsw(uint16_t instr)
 {
+	mul_start();
 	uint32_t reg1 = (instr >> 4) & 0xF;
 	uint32_t reg2 = (instr >> 8) & 0xF;
 
@@ -725,6 +796,7 @@ static void mulsw(uint16_t instr)
 
 static void muluw(uint16_t instr)
 {
+	mul_start();
 	uint32_t reg1 = (instr >> 4) & 0xF;
 	uint32_t reg2 = (instr >> 8) & 0xF;
 
@@ -1054,6 +1126,13 @@ static void rts(uint16_t instr)
 
 //System control instructions
 
+//SLEEP: stop until an interrupt; sh2.cpp run() waits, then takes it with the
+//instruction after the SLEEP as the return address
+static void sleep_instr(uint16_t instr)
+{
+	sh2.sleeping = true;
+}
+
 static void clrmac(uint16_t instr)
 {
 	sh2.macl = 0;
@@ -1081,6 +1160,9 @@ static void ldcl_mem_inc(uint16_t instr)
 	uint32_t value = Bus::read32(sh2.gpr[mem]);
 	set_control_reg(reg, value);
 	sh2.gpr[mem] += 4;
+	//3 states, 2 of them after the memory access, where they cannot hide behind the
+	//next fetch
+	sh2.cycles_left -= 2;
 }
 
 static void lds_reg(uint16_t instr)
@@ -1103,12 +1185,28 @@ static void ldsl_mem_inc(uint16_t instr)
 
 static void rte(uint16_t instr)
 {
+	//Measured: from external-bus code one pop cycle overlaps the idle branch state;
+	//pops from work RAM take a cycle more than their reads, unless the instruction
+	//before RTE read work RAM too (a handler's last POP)
+	if (sh2.exec_external)
+	{
+		sh2.cycles_left += 1;
+	}
+	if (((sh2.gpr[15] >> 24) & 0x7) == 0x1 && !sh2.wram_read_prev_instr)
+	{
+		sh2.cycles_left -= 1;
+	}
 	uint32_t new_pc = Bus::read32(sh2.gpr[15]);
 	sh2.gpr[15] += 4;
 
 	uint32_t new_sr = Bus::read32(sh2.gpr[15]);
 	sh2.gpr[15] += 4;
 
+	//A request still presented after the delay slot is taken in place of the
+	//instruction RTE returns to, so a level interrupt that stays asserted starves
+	//the program (measured). A read before RTE does not fit in its extra state.
+	sh2.read_prev_instr = false;
+	sh2.rte_return = true;
 	handle_jump(new_pc, true);
 	set_sr(new_sr);
 }
@@ -1133,6 +1231,12 @@ static void stcl_mem_dec(uint16_t instr)
 
 	sh2.gpr[mem] -= 4;
 	Bus::write32(sh2.gpr[mem], get_control_reg(reg));
+	//2 states; on the external bus the extra one, before the access, overlaps the
+	//wait for the next fetch
+	if (!sh2.exec_external)
+	{
+		sh2.cycles_left -= 1;
+	}
 }
 
 static void sts_reg(uint16_t instr)
@@ -1294,6 +1398,10 @@ static Handler classify(uint16_t instr)
 	{
 		return &movl_gbrrel_reg;
 	}
+	else if ((instr & 0xFF00) == 0xC300)
+	{
+		return &trapa;
+	}
 	else if ((instr & 0xFF00) == 0xC700)
 	{
 		return &mova;
@@ -1361,6 +1469,10 @@ static Handler classify(uint16_t instr)
 	else if ((instr & 0xF0FF) == 0x4011)
 	{
 		return &cmppz;
+	}
+	else if ((instr & 0xF0FF) == 0x401B)
+	{
+		return &tas;
 	}
 	else if ((instr & 0xF00F) == 0x200C)
 	{
@@ -1554,6 +1666,10 @@ static Handler classify(uint16_t instr)
 	{
 		return &rts;
 	}
+	else if (instr == 0x001B)
+	{
+		return &sleep_instr;
+	}
 	else if (instr == 0x0028)
 	{
 		return &clrmac;
@@ -1638,9 +1754,34 @@ void run(uint16_t instr, uint32_t src_addr)
 	}
 	else
 	{
-		Log::error("[SH2] unrecognized instr %04X at %08X", instr, src_addr);
+		//Log the first with the CPU state, then only counts at 10, 100, 1000, ...
+		if (++unrecognized_count == 1)
+		{
+			unrecognized_first_pc = src_addr;
+			Log::error("[SH2] unrecognized instr %04X at %08X; pr=%08X sr=%08X", instr, src_addr, sh2.pr, sh2.sr);
+			Log::error("[SH2]   r0-r7  %08X %08X %08X %08X %08X %08X %08X %08X", sh2.gpr[0], sh2.gpr[1],
+					   sh2.gpr[2], sh2.gpr[3], sh2.gpr[4], sh2.gpr[5], sh2.gpr[6], sh2.gpr[7]);
+			Log::error("[SH2]   r8-r15 %08X %08X %08X %08X %08X %08X %08X %08X", sh2.gpr[8], sh2.gpr[9],
+					   sh2.gpr[10], sh2.gpr[11], sh2.gpr[12], sh2.gpr[13], sh2.gpr[14], sh2.gpr[15]);
+		}
+		else
+		{
+			uint32_t n = unrecognized_count;
+			while (n % 10 == 0)
+			{
+				n /= 10;
+			}
+			if (n == 1)
+			{
+				Log::error("[SH2] %u unrecognized instructions so far (first at %08X)", unrecognized_count,
+						   unrecognized_first_pc);
+			}
+		}
 		assert(0);
 	}
 }
+
+uint32_t unrecognized_count = 0;
+uint32_t unrecognized_first_pc = 0;
 
 }  // namespace SH2::Interpreter

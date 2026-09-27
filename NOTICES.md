@@ -11,7 +11,7 @@ Gloopy is a **modified version of LoopyMSE**. LoopyMSE is licensed under the GPL
 Gloopy is too — the license carries forward, and any further distribution of this code must
 also be GPL v3 and ship its complete corresponding source.
 
-The modifications described in `README.md` were made in **2026** and are distributed under
+The modifications described in `docs/ARCHITECTURE.md` were made in **2026** and are distributed under
 the GPL v3. **No copyright is claimed over them.**
 
 This program is distributed in the hope that it will be useful, but **WITHOUT ANY
@@ -37,14 +37,24 @@ Licensed under the GNU General Public License v3. See `LICENSE`.
 ### Relationship to upstream
 
 This is an independent hard fork. Changes made here are **not** submitted back to LoopyMSE.
-Please report issues with this core to this repository, not to the LoopyMSE project — 
-bugs and behavior here may not exist upstream, and upstream is not responsible for them.
+Please do not report problems with this core to the LoopyMSE project: bugs and behavior here
+may not exist upstream, and upstream is not responsible for them.
+
+## Test ROMs
+
+The test ROMs in `tools/loopy-lab/` and their documents are original programs written for this
+project; they contain no LoopyMSE code, no BIOS code and no game data. No copyright is claimed
+over them, and they may be used, shared and modified freely.
 
 ## libretro-common
 
 Portions of [libretro-common](https://github.com/libretro/libretro-common)
 (`libretro-common/`, including `libretro.h`) are used under the MIT license,
 Copyright (C) 2010-2023 The RetroArch team.
+
+## AI disclosure
+Gloopy was ported to libretro and updated with the help of Claude Code. During development,
+actual Casio Loopy hardware values were measured and matched whenever possible.
 
 ## Casio Loopy
 

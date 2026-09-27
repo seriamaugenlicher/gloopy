@@ -156,4 +156,4 @@ jobs:
             dist/gloopy-*-src.tar.gz dist/gloopy-*-src.tar.gz.sha256 \
             --draft \
             --title "Gloopy ${GITHUB_REF_NAME}" \
-            --notes "Draft — replace with the full release notes before publishing. Feature-complete, provided as-is without warranty, not maintained. See README.md and HANDOFF.md."
+            --notes "Draft — replace with the full release notes before publishing. Feature-complete, provided as-is without warranty, not maintained. See README.md."

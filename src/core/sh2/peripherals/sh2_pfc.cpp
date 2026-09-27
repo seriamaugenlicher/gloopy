@@ -1,6 +1,7 @@
 #include <log/log.h>
 
 #include <cassert>
+#include "core/sh2/peripherals/sh2_intc.h"
 #include "core/sh2/peripherals/sh2_pfc.h"
 #include "core/sh2/sh2_bus.h"
 
@@ -11,9 +12,32 @@ struct GpioState
 {
 	uint16_t output[2];
 	uint16_t direction[2];
+	uint16_t control[4];  //PACR1, PACR2, PBCR1, PBCR2
 };
 
+//PACR1 pin functions. The VDP's signals reach the INTC only when their pin is
+//set to it: PA13 (raster DMA signal) as IRQ1 or DREQ0, PA12 as IRQ0, PA14 as IRQ2
+constexpr uint16_t PA13_MODE_MASK = 0x0C00;
+constexpr uint16_t PA13_MODE_IRQ1 = 0x0400;
+constexpr uint16_t PA12_MODE_MASK = 0x0300;
+constexpr uint16_t PA12_MODE_IRQ0 = 0x0100;
+constexpr uint16_t PA14_MODE_MASK = 0x3000;
+constexpr uint16_t PA14_MODE_IRQ2 = 0x1000;
+
 static GpioState gpio;
+
+bool pa13_is_dreq0()
+{
+	return (gpio.control[0] & PA13_MODE_MASK) == PA13_MODE_MASK;
+}
+
+static void update_pin_functions()
+{
+	INTC::set_irq1_pin_enabled((gpio.control[0] & PA13_MODE_MASK) == PA13_MODE_IRQ1);
+	INTC::set_irq0_pin_enabled((gpio.control[0] & PA12_MODE_MASK) == PA12_MODE_IRQ0);
+	INTC::set_irq2_pin_enabled((gpio.control[0] & PA14_MODE_MASK) == PA14_MODE_IRQ2);
+	INTC::set_dreq0_pin_enabled((gpio.control[0] & PA13_MODE_MASK) == PA13_MODE_MASK);
+}
 
 uint16_t read_gpio_inputs(int port)
 {
@@ -22,7 +46,9 @@ uint16_t read_gpio_inputs(int port)
 		// Port A
 		constexpr int pa8_cart_present = 1;  //We don't run without a cartridge so this is always high
 		constexpr int pa11_unk = 0;  //Tied hard low on all known boards, BIOS copies to an unknown VDP option
-		return (pa11_unk << 11) | (pa8_cart_present << 8);
+		//PA13 carries the VDP's raster DMA signal, readable as a plain input too
+		int pa13_raster = INTC::irq1_line_low() ? 0 : 1;
+		return (pa13_raster << 13) | (pa11_unk << 11) | (pa8_cart_present << 8);
 	}
 	else if (port == 1)
 	{
@@ -55,6 +81,11 @@ uint16_t read16(uint32_t addr)
 	case 0x06:
 		gpio_port = (addr >> 1) & 1;
 		return gpio.direction[gpio_port];
+	case 0x08:
+	case 0x0A:
+	case 0x0C:
+	case 0x0E:
+		return gpio.control[(addr - 0x08) >> 1];
 	default:
 		Log::warn("[PFC] unmapped read %08X", addr);
 		return 0;
@@ -84,12 +115,21 @@ void write16(uint32_t addr, uint16_t value)
 	case 0x08:
 	case 0x0C:
 		gpio_port = (addr >> 2) & 1;
+		gpio.control[(addr - 0x08) >> 1] = value;
 		Log::debug("[PFC] GPIO write P%sCR1: %04X", gpio_port ? "B" : "A", value);
+		if (addr == 0x08)
+		{
+			update_pin_functions();
+		}
 		break;
 	case 0x0A:
 	case 0x0E:
 		gpio_port = (addr >> 2) & 1;
+		gpio.control[(addr - 0x08) >> 1] = value;
 		Log::debug("[PFC] GPIO write P%sCR2: %04X", gpio_port ? "B" : "A", value);
+		break;
+	case 0x2E:
+		//CASCR: selects the DRAM column address strobe pins, no emulated effect
 		break;
 	default:
 		Log::warn("[PFC] unmapped write %08X: %04X", addr, value);

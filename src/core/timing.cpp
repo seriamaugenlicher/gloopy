@@ -68,6 +68,24 @@ struct State
 
 static State state;
 
+//Not part of State: it is chosen before initialize() and must survive it
+static bool use_hardware_refresh = false;
+
+void set_hardware_refresh(bool hardware)
+{
+	use_hardware_refresh = hardware;
+}
+
+bool hardware_refresh()
+{
+	return use_hardware_refresh;
+}
+
+double frame_rate()
+{
+	return use_hardware_refresh ? HARDWARE_FRAME_RATE : 60.0;
+}
+
 bool operator>(const Event& l, const Event& r)
 {
 	return l.exec_time > r.exec_time;
@@ -82,6 +100,15 @@ static Timer* get_timer(int id)
 
 	assert(id < state.timers.size());
 	return &state.timers[id];
+}
+
+//How late the event being dispatched runs (0 outside dispatch). The CPU stops only
+//between instructions, so an event can fall due a few cycles inside the last one
+static int dispatch_late;
+
+int event_lateness()
+{
+	return dispatch_late;
 }
 
 static void process_events()
@@ -102,7 +129,9 @@ static void process_events()
 		timer->events.pop_back();
 
 		int cycles_late = timer->timestamp - ev.exec_time;
+		dispatch_late = cycles_late;
 		ev.func(ev.param, cycles_late);
+		dispatch_late = 0;
 	}
 }
 
@@ -231,6 +260,8 @@ int64_t calc_slice_length(int id)
 
 	return slice_length;
 }
+
+int read_bias = 0;
 
 int64_t get_timestamp(int id)
 {

@@ -12,7 +12,6 @@ struct State
 {
 	std::vector<uint8_t> rom;
 	std::vector<uint8_t> sram;
-	std::string sram_file_path;
 };
 
 static State state;
@@ -23,7 +22,6 @@ void initialize(Config::CartInfo& info)
 
 	state.rom = info.rom;
 	state.sram = info.sram;
-	state.sram_file_path = info.sram_file_path;
 
 	//Ensure that the ROM and SRAM are aligned to a 4 KB boundary
 	if (state.rom.size() & 0xFFF)

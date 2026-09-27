@@ -14,7 +14,7 @@
 namespace Expansion::MSM665X
 {
 
-bool enable(uint32_t cart_checksum);
+void enable();
 bool is_enabled();
 void initialize(std::string rom_path);
 void shutdown();

@@ -1,9 +1,6 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -126,29 +123,6 @@ public:
 		const uint8_t* bytes = (const uint8_t*)data;
 		buffer.assign(bytes, bytes + size);
 		read_pos = 0;
-	}
-
-	bool save_file(const std::filesystem::path& path)
-	{
-		std::ofstream file(path, std::ios::binary);
-		if (!file.is_open())
-		{
-			return false;
-		}
-		file.write((const char*)buffer.data(), buffer.size());
-		return file.good();
-	}
-
-	bool load_file(const std::filesystem::path& path)
-	{
-		std::ifstream file(path, std::ios::binary);
-		if (!file.is_open())
-		{
-			return false;
-		}
-		buffer.assign(std::istreambuf_iterator<char>(file), {});
-		read_pos = 0;
-		return true;
 	}
 
 private:

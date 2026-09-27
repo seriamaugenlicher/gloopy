@@ -13,23 +13,14 @@ void initialize(Config::CartInfo& cart)
 {
 	if (!cart.is_loaded()) return;
 
-	// Use cart checksum from header as cart ID
-	const size_t CHECKSUM_OFFSET = 8;
-	if (CHECKSUM_OFFSET + sizeof(uint32_t) > cart.rom.size()) return;
-	uint32_t checksum = cart.rom[CHECKSUM_OFFSET] << 24 | cart.rom[CHECKSUM_OFFSET + 1] << 16 |
-						cart.rom[CHECKSUM_OFFSET + 2] << 8 | cart.rom[CHECKSUM_OFFSET + 3];
-
-	// Conditionally turn on cart expansions depending on the inserted cart
-	if (MSM665X::enable(checksum)) MSM665X::initialize(cart.rom_path);
+	//The expansion chip is offered to every cart; see msm665x.cpp for why
+	MSM665X::enable();
+	MSM665X::initialize(cart.rom_path);
 }
 
 void shutdown()
 {
 	if (MSM665X::is_enabled()) MSM665X::shutdown();
-}
-
-void unmapped_write8(uint32_t addr, uint8_t value)
-{
 }
 
 uint8_t exp_read8(uint32_t addr)

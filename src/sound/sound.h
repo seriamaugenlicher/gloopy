@@ -21,24 +21,29 @@ Game support notes:
 #include <vector>
 
 #include <core/savestate.h>
+#include <core/timing.h>
 
 namespace Sound
 {
 
-// Target output format. 44100-48000Hz provides good quality.
-// The libretro frontend consumes exactly one video frame of audio per
-// retro_run, so the engine's smoothing window is one frame long.
-constexpr static int TARGET_SAMPLE_RATE = 48000;
-constexpr static int SAMPLES_PER_FRAME = TARGET_SAMPLE_RATE / 60;
+// Output format. The libretro frontend consumes exactly one video frame of audio
+// per retro_run, so the engine's smoothing window is one frame long. A frame is a
+// fixed 800 samples, and the rate follows from the frame rate: 48000 Hz at 60 Hz,
+// about 47861 Hz at the hardware's 59.8261 Hz (see output_sample_rate).
+constexpr static int SAMPLES_PER_FRAME = 800;
 constexpr static int TARGET_BUFFER_SIZE = SAMPLES_PER_FRAME;
+
+inline double output_sample_rate()
+{
+	return SAMPLES_PER_FRAME * Timing::frame_rate();
+}
 
 // Time reference to smooth out audio timing at larger buffer sizes. Assumes consistent CPU timing.
 // Ideally should be a multiple of the video framerate for frame-dependent sound events to sync well.
 constexpr static int TIMEREF_FREQUENCY = 240;
-constexpr static bool TIMEREF_ENABLE = TIMEREF_FREQUENCY > (TARGET_SAMPLE_RATE / TARGET_BUFFER_SIZE);
 
-// Fade up/down time in milliseconds when sound is muted e.g. by minimizing the window.
-constexpr static int MUTE_FADE_MS = 20;
+// Output fades in from silence over this many milliseconds when the engine first starts.
+constexpr static int FADE_IN_MS = 20;
 
 // Audio synthesis parameters in loopysound.h.
 
@@ -61,7 +66,6 @@ void ctrl_write16(uint32_t addr, uint16_t value);
 void ctrl_write32(uint32_t addr, uint32_t value);
 
 void midi_byte_in(uint8_t value);
-void set_mute(bool mute_in);
 
 // Generate stereo_frames frames (2x int16 samples each) of output.
 // Called once per emulated frame by the libretro glue.

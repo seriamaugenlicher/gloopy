@@ -12,6 +12,12 @@ struct VDP
 	//its BMP dump tooling; this fork drops them, since nothing consumes them.
 	std::unique_ptr<uint16_t[]> display_output;
 
+	//Hi-res (blend mode 3) output, assembled by compose_hires_frame. Output only:
+	//never serialized; the flags are cleared by start_frame.
+	std::unique_ptr<uint16_t[]> display_output_hires;
+	uint8_t line_is_hires[DISPLAY_HEIGHT];
+	bool frame_has_hires;
+
 	int frame_ended;
 	int visible_scanlines; //Configured by VDP_MODE
 
@@ -61,6 +67,17 @@ struct VDP
 	uint16_t hcount;
 	uint16_t vcount;
 
+	//Fraction of a CPU cycle left over from the lines scheduled so far, in units of
+	//1/F_VDP, carried so frames keep the hardware's exact length on average
+	int64_t line_cycle_remainder;
+
+	//The current line's length in CPU cycles, and when its boundary (HCOUNT -84,
+	//where VCOUNT stepped) was: HCOUNT and IRQ0 are timed from it
+	int line_cycles;
+	int64_t line_boundary_time;
+	//Where the line boundary falls in the VDP's 8-clock bitmap VRAM slot cycle
+	//(0-7): a line is 1365 VDP clocks, so it moves 5 clocks a line
+
 	struct SyncIrqCtrl
 	{
 		int irq1_enable;
@@ -76,7 +93,14 @@ struct VDP
 	{
 		uint16_t scrollx;
 		uint16_t scrolly;
+		//The scroll Y the picture uses: taken once per frame, as the frame's first
+		//line starts (see start_hsync)
+		uint16_t frame_scrolly;
+		//The scroll X the current line uses: taken at its boundary (HCOUNT -84)
+		uint16_t line_scrollx;
 		uint16_t screenx;
+		//The screen X the picture uses: taken once per frame, with frame_scrolly
+		uint16_t frame_screenx;
 		uint16_t screeny;
 		uint16_t w;
 		uint16_t clipx;
@@ -103,6 +127,15 @@ struct VDP
 	BgCtrl bg_ctrl;
 	uint16_t bg_scrollx[2];
 	uint16_t bg_scrolly[2];
+	//What the line being drawn uses: scroll X and the enable are taken once per
+	//line in its horizontal blank; scroll Y tile by tile, ahead of the beam
+	uint16_t bg_scrollx_line[2];
+	int bg_enable_line[2];
+	static constexpr int MAX_BG_Y_SPLITS = 16;
+	uint16_t bg_scrolly_start[2];
+	int bg_y_split_count[2];
+	int bg_y_split_x[2][MAX_BG_Y_SPLITS];
+	uint16_t bg_y_split_value[2][MAX_BG_Y_SPLITS];
 	uint16_t bg_palsel[2];
 	uint16_t tilebase;
 
@@ -124,6 +157,9 @@ struct VDP
 	{
 		int bg_enable[2];
 		int bitmap_enable[4];
+		//The bitmap enables the picture uses: taken once per frame, with the
+		//layers' frame_scrolly
+		int bitmap_enable_frame[4];
 		int obj_enable[2];
 		int bitmap_screen_mode[2];
 		int obj_screen_mode[2];
@@ -143,10 +179,24 @@ struct VDP
 	ColorPrio color_prio;
 	uint16_t backdrops[2];
 
+	//Palette and backdrop writes during a line: the colours before each and the
+	//first pixel it reaches. The line is composited at its end, pixels before x_end
+	//from the saved colours.
+	struct ColorSplit
+	{
+		int x_end;
+		uint16_t backdrops[2];
+		uint16_t palette[PALETTE_SIZE / 2];
+	};
+	constexpr static int MAX_COLOR_SPLITS = 8;
+	ColorSplit color_splits[MAX_COLOR_SPLITS];
+	int color_split_count;
+
 	struct CaptureCtrl
 	{
 		int scanline;
 		int format;
+		int raw;
 	};
 
 	CaptureCtrl capture_ctrl;
@@ -158,6 +208,8 @@ struct VDP
 		int nmi_enable;
 		int use_vcmp;
 		int irq0_enable2;
+		int irq2_enable;  //bits 0, 3 and 6, all three needed
+		int irq2_source;  //0 = scanline capture ready, 1 = ADC ready
 	};
 
 	CmpIrqCtrl cmp_irq_ctrl;
@@ -167,6 +219,12 @@ struct VDP
 	//DMA ctrl registers - 0x0C05Exxx
 	uint16_t dma_mask;
 	uint16_t dma_value;
+	//BM_MEM_CTRL: bit 0 = fast bitmap VRAM access
+	uint16_t bm_mem_ctrl;
+	//Line-mode raster DMA signal already back high on this line
+	bool raster_risen;
+	//Line-mode raster DMA signal already low ahead of the next line boundary
+	bool raster_fell;
 };
 
 extern VDP vdp;

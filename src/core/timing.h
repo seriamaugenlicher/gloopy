@@ -47,6 +47,25 @@ struct EventHandle
 //The clockrate of the CPU is exactly 16 MHz
 constexpr static int F_CPU = 16 * 1000 * 1000;
 
+//The VDP's own clock (NTSC), which sets the video timing: every frame is 263 lines
+//of 1365 VDP cycles, so the console runs at 59.8261 Hz rather than 60 (megadoc,
+//Raster Counters). A line is not a whole number of CPU cycles; see inc_vcount.
+constexpr static int64_t F_VDP = 21477272;
+constexpr static int VDP_CYCLES_PER_LINE = 1365;
+constexpr static int LINES_PER_FRAME = 263;
+constexpr static double HARDWARE_FRAME_RATE = (double)F_VDP / (VDP_CYCLES_PER_LINE * LINES_PER_FRAME);
+
+//CPU cycles in one frame, measured on a console: 267,970 (about 1018.9 per line),
+//0.2% more than the nominal clocks give. Only this ratio is used; F_CPU stays the
+//timebase for everything else.
+constexpr static int64_t CPU_CYCLES_PER_FRAME = 267970;
+
+//The machine runs either at exactly 60 Hz or at the hardware's 59.8261 Hz (Video >
+//Refresh Rate). Chosen before System::initialize and fixed for the session.
+void set_hardware_refresh(bool hardware);
+bool hardware_refresh();
+double frame_rate();
+
 //Maximum amount of time alloted to a slice
 //TODO: make this bigger?
 constexpr static int64_t MAX_SLICE_LENGTH = 512;
@@ -70,6 +89,13 @@ void process_slice(int id, int32_t slice);
 int64_t calc_slice_length(int id);
 
 int64_t get_timestamp(int id = -1);
+
+//Cycles from now to where the register read in progress samples the state it
+//returns (set by the bus around a device read, 0 otherwise)
+extern int read_bias;
+inline int64_t read_time() { return get_timestamp(CPU_TIMER) + read_bias; }
+//Cycles the event being dispatched is running late by (0 outside an event)
+int event_lateness();
 
 UnitCycle convert_cpu(int64_t cycles);
 

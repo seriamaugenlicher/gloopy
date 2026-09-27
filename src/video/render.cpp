@@ -1,6 +1,7 @@
 #include "video/render.h"
 
 #include <common/bswp.h>
+#include <log/log.h>
 
 #include <algorithm>
 #include <cassert>
@@ -145,9 +146,24 @@ static void get_tilemap_info(TilemapInfo& info)
 	}
 }
 
+//Offset of one pixel of a tile or object in character space, in 8bpp pixels (halve
+//it for 4bpp). Characters form a grid 8 wide, and a tile or object larger than one
+//character wraps on each axis on its own: a 16x16 tile at character 7 uses 7, 0, 15
+//and 8. Split into row | column parts so the row part is computed once per line.
+static inline uint32_t char_row_offset(int chr, int split_rows, int tile_y)
+{
+	int row = ((chr >> 3) + split_rows + (tile_y >> 3)) & 0xFF;
+	return ((uint32_t)row << 9) | ((tile_y & 0x7) << 3);
+}
+
+static inline uint32_t char_col_offset(int chr, int tile_x)
+{
+	return (uint32_t)(((chr + (tile_x >> 3)) & 0x7) << 6) | (tile_x & 0x7);
+}
+
 static void draw_bg(int index, int screen_y)
 {
-	if (!vdp.layer_ctrl.bg_enable[index])
+	if (!vdp.bg_enable_line[index])
 	{
 		return;
 	}
@@ -168,11 +184,19 @@ static void draw_bg(int index, int screen_y)
 
 	uint32_t map_start = (index == 1) ? tilemap.bg1_start : 0;
 
+	//4bpp characters start after the 8bpp rows the character split reserves. The
+	//split counts in character-grid rows, two per reserved 8bpp row.
+	int split_rows = is_8bit ? 0 : (vdp.tilebase & 0x7F) << 1;
+
 	//The vertical position and its derived tilemap row are constant across
 	//the scanline; the tile descriptor only changes at tile boundaries
-	int scrollx = vdp.bg_scrollx[index];
+	int scrollx = vdp.bg_scrollx_line[index];
 	int wrap_x_mask = (tilemap.width * tile_size) - 1;
-	int y = (screen_y + vdp.bg_scrolly[index]) & ((tilemap.height * tile_size) - 1);
+	int wrap_y_mask = (tilemap.height * tile_size) - 1;
+	//Scroll Y written during the line takes over from its split pixel on
+	int splits = vdp.bg_y_split_count[index], next_split = 0;
+	int next_split_x = splits ? vdp.bg_y_split_x[index][0] : DISPLAY_WIDTH;
+	int y = (screen_y + (splits ? vdp.bg_scrolly_start[index] : vdp.bg_scrolly[index])) & wrap_y_mask;
 	uint32_t map_row = (uint32_t)(y >> tile_shift) * tilemap.width;
 
 	uint32_t last_map_offs = 0xFFFFFFFF;
@@ -182,9 +206,18 @@ static void draw_bg(int index, int screen_y)
 	int pal_descriptor = 0;
 	bool x_flip = false;
 	bool y_flip = false;
+	uint32_t char_row_bits = 0;
 
 	for (int screen_x = 0; screen_x < DISPLAY_WIDTH; screen_x++)
 	{
+		while (screen_x >= next_split_x)
+		{
+			y = (screen_y + vdp.bg_y_split_value[index][next_split]) & wrap_y_mask;
+			map_row = (uint32_t)(y >> tile_shift) * tilemap.width;
+			last_map_offs = 0xFFFFFFFF;
+			next_split++;
+			next_split_x = next_split < splits ? vdp.bg_y_split_x[index][next_split] : DISPLAY_WIDTH;
+		}
 		int x = (screen_x + scrollx) & wrap_x_mask;
 
 		uint32_t map_offs = (uint32_t)(x >> tile_shift) + map_row;
@@ -200,6 +233,13 @@ static void draw_bg(int index, int screen_y)
 			pal_descriptor = (descriptor >> 12) & 0x3;
 			x_flip = (descriptor >> 14) & 0x1;
 			y_flip = descriptor >> 15;
+
+			int tile_y = y & tile_size_mask;
+			if (y_flip)
+			{
+				tile_y = tile_size_mask - tile_y;
+			}
+			char_row_bits = char_row_offset(tile_index, split_rows, tile_y);
 		}
 
 		int tile_x = x & tile_size_mask;
@@ -208,28 +248,16 @@ static void draw_bg(int index, int screen_y)
 			tile_x = tile_size_mask - tile_x;
 		}
 
-		int tile_y = y & tile_size_mask;
-		if (y_flip)
-		{
-			tile_y = tile_size_mask - tile_y;
-		}
-
-		//tile_index is cached with the descriptor, so accumulate into a local
-		uint16_t cur_tile_index = tile_index;
-		cur_tile_index += tile_y & ~0x7;
-		cur_tile_index += tile_x >> 3;
-		uint32_t offs = (tile_x & 0x7) + ((tile_y & 0x7) * 0x08) + (cur_tile_index << 6);
+		uint32_t offs = char_row_bits | char_col_offset(tile_index, tile_x);
 
 		uint8_t tile_data;
 		if (is_8bit)
 		{
-			tile_data = vdp.tile[(tilemap.data_start + offs) & 0xFFFF];
+			tile_data = vdp.tile[(tilemap.data_start + (offs & 0xFFFF)) & 0xFFFF];
 		}
 		else
 		{
-			offs >>= 1;
-			offs += vdp.tilebase << 9;
-			tile_data = vdp.tile[(tilemap.data_start + offs) & 0xFFFF];
+			tile_data = vdp.tile[(tilemap.data_start + (offs >> 1)) & 0xFFFF];
 			if (tile_x & 0x1)
 			{
 				tile_data &= 0xF;
@@ -260,7 +288,7 @@ static void draw_bg(int index, int screen_y)
 
 static void draw_bitmap(int index, int y)
 {
-	if (!vdp.layer_ctrl.bitmap_enable[index])
+	if (!vdp.layer_ctrl.bitmap_enable_frame[index])
 	{
 		return;
 	}
@@ -273,7 +301,7 @@ static void draw_bitmap(int index, int y)
 		return;
 	}
 
-	int screenx = regs->screenx;
+	int screenx = regs->frame_screenx;
 	if (screenx & 0x100)
 	{
 		screenx -= 0x200;
@@ -290,7 +318,19 @@ static void draw_bitmap(int index, int y)
 	bool is_8bit = false;
 	bool split_x = false, split_y = false;
 	int vram_width = 0, vram_height = 0;
-	switch (vdp.bitmap_ctrl)
+
+	//Modes 5-7 are invalid: 5 behaves as 0, and 6 and 7 as 1
+	int bitmap_mode = vdp.bitmap_ctrl & 0x7;
+	if (bitmap_mode == 5)
+	{
+		bitmap_mode = 0;
+	}
+	else if (bitmap_mode > 5)
+	{
+		bitmap_mode = 1;
+	}
+
+	switch (bitmap_mode)
 	{
 	case 0x00:
 		is_8bit = true;
@@ -334,11 +374,11 @@ static void draw_bitmap(int index, int y)
 	int width_mask = vram_width - 1;
 	int height_mask = vram_height - 1;
 
-	int data_y = (y + regs->scrolly - regs->screeny) & height_mask;
+	int data_y = (y + regs->frame_scrolly - regs->screeny) & height_mask;
 	//If split_y is true, there are two separate maps at y=0 and y=256 that get scrolled independently
 	if (split_y)
 	{
-		data_y |= regs->scrolly & 0x100;
+		data_y |= regs->frame_scrolly & 0x100;
 	}
 
 	//Fetch the appropriate line independent of screenx and process color buffering
@@ -349,7 +389,7 @@ static void draw_bitmap(int index, int y)
 	//byte; split_x moves its map-select bit into the row via data_x).
 	uint8_t bm_cache_line[256];
 	int bm_cache_end = std::min(255, regs->w + 1); //HW bug: one extra pixel is processed unless full line
-	int scrollx = regs->scrollx;
+	int scrollx = regs->line_scrollx;
 	int split_x_bits = split_x ? (scrollx & 0x100) : 0;
 	uint32_t row_base = (uint32_t)data_y << 8;
 
@@ -451,7 +491,6 @@ static void draw_bitmap(int index, int y)
 		{
 			continue;
 		}
-
 
 		if (output_mode & 0x1)
 		{
@@ -557,7 +596,7 @@ static void draw_obj(int index, int screen_y)
 	//Invariant for every object on this layer
 	bool is_8bit = vdp.obj_ctrl.is_8bit;
 	uint32_t data_start = tilemap.data_start;
-	uint32_t tilebase_offs = vdp.tilebase << 9;
+	int split_rows = is_8bit ? 0 : (vdp.tilebase & 0x7F) << 1;
 	int tile_index_offs = vdp.obj_ctrl.tile_index_offs[index] << 8;
 	uint16_t palsel = vdp.obj_palsel[index];
 	const uint8_t* tile_mem = vdp.tile;
@@ -605,9 +644,9 @@ static void draw_obj(int index, int screen_y)
 			tile_y = obj_height - 1 - tile_y;
 		}
 
-		//The tile row is fixed for the scanline, so only the column varies per pixel
-		int tile_row = (descriptor >> 24) + (tile_y & ~0x7) + tile_index_offs;
-		uint32_t row_offs = (tile_y & 0x7) * 0x08;
+		//The full 11-bit starting character: the layer's high bits over the entry's 8
+		int chr = (int)(descriptor >> 24) | tile_index_offs;
+		uint32_t row_bits = char_row_offset(chr, split_rows, tile_y);
 
 		if (is_8bit)
 		{
@@ -621,10 +660,8 @@ static void draw_obj(int index, int screen_y)
 
 				int tile_x = x_flip ? (obj_width - 1 - px) : px;
 
-				int tile_index = tile_row + (tile_x >> 3);
-				uint32_t offs = (tile_x & 0x7) + row_offs + (tile_index << 6);
-
-				uint8_t output = tile_mem[(data_start + offs) & 0xFFFF];
+				uint32_t offs = row_bits | char_col_offset(chr, tile_x);
+				uint8_t output = tile_mem[(data_start + (offs & 0xFFFF)) & 0xFFFF];
 				if (!output)
 				{
 					continue;
@@ -657,10 +694,7 @@ static void draw_obj(int index, int screen_y)
 
 				int tile_x = x_flip ? (obj_width - 1 - px) : px;
 
-				int tile_index = tile_row + (tile_x >> 3);
-				uint32_t offs = ((tile_x & 0x7) + row_offs + (tile_index << 6)) >> 1;
-				offs += tilebase_offs;
-
+				uint32_t offs = (row_bits | char_col_offset(chr, tile_x)) >> 1;
 				uint8_t tile_data = tile_mem[(data_start + offs) & 0xFFFF];
 				tile_data = (tile_x & 0x1) ? (tile_data & 0xF) : (tile_data >> 4);
 
@@ -737,98 +771,201 @@ static void draw_layers(int y)
 	}
 }
 
-static void draw_color_math(int y, bool half)
+//---------------------------------------------------------------------------
+//The blend stage: how screens A and B become the picture (VDP.BLEND_MODE).
+//
+//Each mode has its own loop in draw_scanline, built from the per-pixel helpers
+//below. Capture format 0 uses the same helpers (blended_pixel), so a capture always
+//matches the display.
+//---------------------------------------------------------------------------
+
+//Features no retail game is known to use, reported once per session
+enum RareFeature
 {
-	for (int x = 0; x < DISPLAY_WIDTH; x++)
+	RARE_BLEND_A_ONLY,
+	RARE_BLEND_HIRES,
+	RARE_BLEND_INVALID,
+	RARE_MODE4_TOP_OFF,
+	RARE_MODE4_SBCOL,
+	RARE_MODE5_TOP_OFF,
+	RARE_CAPTURE_BLENDED,
+};
+
+static uint32_t rare_reported;
+
+static void report_once(RareFeature feature, const char* message)
+{
+	if (rare_reported & (1u << feature))
 	{
-		uint16_t input_a = 0, input_b = 0;
-		if (vdp.color_prio.output_screen_a)
+		return;
+	}
+	rare_reported |= 1u << feature;
+	Log::info("[Video] %s", message);
+}
+
+void reset()
+{
+	rare_reported = 0;
+}
+
+//A screen's colour entering the blend: its layers, or its backdrop where they are
+//transparent. A screen switched off at SCREEN_CTRL is black, which is how modes
+//0-3 treat it. Modes 4 and 5 treat an off top screen as transparent instead, and
+//check for that themselves.
+static inline uint16_t screen_a_color(int x)
+{
+	return vdp.color_prio.output_screen_a ? read_screen(0, x) : 0;
+}
+
+static inline uint16_t screen_b_color(int x)
+{
+	return vdp.color_prio.output_screen_b ? read_screen(1, x) : 0;
+}
+
+//Modes 0 and 1: per-channel add or subtract (CSUB), optionally halved, clamped
+static inline uint16_t color_math_pixel(int x, bool half)
+{
+	uint16_t input_a = screen_a_color(x);
+	uint16_t input_b = screen_b_color(x);
+
+	int a_r = (input_a >> 10) & 0x1F;
+	int a_g = (input_a >> 5) & 0x1F;
+	int a_b = input_a & 0x1F;
+
+	int b_r = (input_b >> 10) & 0x1F;
+	int b_g = (input_b >> 5) & 0x1F;
+	int b_b = input_b & 0x1F;
+
+	int out_r, out_g, out_b;
+
+	if (vdp.color_prio.blend_mode)
+	{
+		//Subtractive blending
+		out_r = a_r - b_r;
+		out_g = a_g - b_g;
+		out_b = a_b - b_b;
+	}
+	else
+	{
+		//Additive blending
+		out_r = a_r + b_r;
+		out_g = a_g + b_g;
+		out_b = a_b + b_b;
+	}
+
+	if (half)
+	{
+		out_r >>= 1;
+		out_g >>= 1;
+		out_b >>= 1;
+	}
+
+	out_r = std::clamp(out_r, 0, 0x1F);
+	out_g = std::clamp(out_g, 0, 0x1F);
+	out_b = std::clamp(out_b, 0, 0x1F);
+
+	return (uint16_t)((out_r << 10) | (out_g << 5) | out_b);
+}
+
+//Modes 4 (B over A) and 5 (A over B). The top screen shows only where it drew a
+//layer; where it is transparent (or switched off) the bottom one shows, or black if
+//that is off. In mode 4 an SBCOL screen B covers A with its backdrop everywhere.
+static inline uint16_t overlay_pixel(int x, bool screen_b_on_top)
+{
+	if (screen_b_on_top)
+	{
+		if (vdp.color_prio.output_screen_b && vdp.color_prio.screen_b_backdrop_only)
 		{
-			input_a = read_screen(0, x);
+			return vdp.backdrops[1];
 		}
+		uint8_t b = vdp.screens[1][x];
+		bool b_drew = b && vdp.color_prio.output_screen_b && !vdp.color_prio.screen_b_backdrop_only;
+		return b_drew ? read_palette(b) : screen_a_color(x);
+	}
 
-		if (vdp.color_prio.output_screen_b)
-		{
-			input_b = read_screen(1, x);
-		}
+	uint8_t a = vdp.screens[0][x];
+	bool a_drew = a && vdp.color_prio.output_screen_a;
+	return a_drew ? read_palette(a) : screen_b_color(x);
+}
 
-		int a_r = (input_a >> 10) & 0x1F;
-		int a_g = (input_a >> 5) & 0x1F;
-		int a_b = input_a & 0x1F;
-
-		int b_r = (input_b >> 10) & 0x1F;
-		int b_g = (input_b >> 5) & 0x1F;
-		int b_b = input_b & 0x1F;
-
-		int out_r, out_g, out_b;
-
-		if (vdp.color_prio.blend_mode)
-		{
-			//Subtractive blending
-			out_r = a_r - b_r;
-			out_g = a_g - b_g;
-			out_b = a_b - b_b;
-		}
-		else
-		{
-			//Additive blending
-			out_r = a_r + b_r;
-			out_g = a_g + b_g;
-			out_b = a_b + b_b;
-		}
-
-		if (half)
-		{
-			out_r >>= 1;
-			out_g >>= 1;
-			out_b >>= 1;
-		}
-
-		out_r = std::clamp(out_r, 0, 0x1F);
-		out_g = std::clamp(out_g, 0, 0x1F);
-		out_b = std::clamp(out_b, 0, 0x1F);
-
-		uint16_t output = (out_r << 10) | (out_g << 5) | out_b;
-		write_display_color(x, y, output);
+//The blend result for one pixel in 15bpp: what the display shows, and what
+//capture format 0 records. Hi-res has no single blended colour; the megadoc
+//defines its "blended output" as screen B alone.
+static uint16_t blended_pixel(int x)
+{
+	switch (vdp.dispmode)
+	{
+	case 0x00:
+		return color_math_pixel(x, false);
+	case 0x01:
+		return color_math_pixel(x, true);
+	case 0x02:
+		return screen_a_color(x);
+	case 0x03:
+		return screen_b_color(x);
+	case 0x04:
+		return overlay_pixel(x, true);
+	case 0x05:
+		return overlay_pixel(x, false);
+	default:
+		return 0;
 	}
 }
 
-static void draw_screen_overlay(int y, bool screen_b_prio)
+//The pixels of the line being composited: all of it, or one part of it when a
+//palette or backdrop write split the line (see draw_scanline)
+static int seg_x0 = 0;
+static int seg_x1 = DISPLAY_WIDTH;
+
+static void draw_color_math(int y, bool half)
 {
-	for (int x = 0; x < DISPLAY_WIDTH; x++)
+	for (int x = seg_x0; x < seg_x1; x++)
 	{
-		uint16_t input_a = 0, input_b = 0;
-		if (vdp.color_prio.output_screen_a)
-		{
-			input_a = read_screen(0, x);
-		}
+		write_display_color(x, y, color_math_pixel(x, half));
+	}
+}
 
-		if (vdp.color_prio.output_screen_b)
-		{
-			input_b = read_screen(1, x);
-		}
+static void draw_screen_overlay(int y, bool screen_b_on_top)
+{
+	for (int x = seg_x0; x < seg_x1; x++)
+	{
+		write_display_color(x, y, overlay_pixel(x, screen_b_on_top));
+	}
+}
 
-		uint16_t output = 0;
-		if (screen_b_prio)
-		{
-			output = input_a;
+//Mode 2: screen A alone, screen B unused
+static void draw_screen_a_only(int y)
+{
+	for (int x = seg_x0; x < seg_x1; x++)
+	{
+		write_display_color(x, y, screen_a_color(x));
+	}
+}
 
-			if (vdp.screens[1][x])
-			{
-				output = input_b;
-			}
-		}
-		else
-		{
-			output = input_b;
+//Mode 3, hi-res: each pixel is two half-pixels, screen A then B, written into the
+//512-wide buffer (see compose_hires_frame). The 256-wide row keeps screen B, the
+//mode's "blended output".
+static void draw_hires(int y)
+{
+	uint16_t* row = vdp.display_output_hires.get() + (size_t)y * HIRES_DISPLAY_WIDTH;
+	for (int x = seg_x0; x < seg_x1; x++)
+	{
+		uint16_t a = screen_a_color(x);
+		uint16_t b = screen_b_color(x);
+		row[x * 2] = display_encode(a);
+		row[x * 2 + 1] = display_encode(b);
+		write_display_color(x, y, b);
+	}
+	vdp.line_is_hires[y] = 1;
+	vdp.frame_has_hires = true;
+}
 
-			if (vdp.screens[0][x])
-			{
-				output = input_a;
-			}
-		}
-
-		write_display_color(x, y, output);
+//Modes 6 and 7 are invalid; the megadoc reports "generally a black screen"
+static void draw_invalid_blend(int y)
+{
+	for (int x = seg_x0; x < seg_x1; x++)
+	{
+		write_display_color(x, y, 0);
 	}
 }
 
@@ -838,16 +975,17 @@ static void display_capture(int y)
 	switch (vdp.capture_ctrl.format)
 	{
 	case 0:
-		//Capture blended output in 15bpp.
-		//WARNING: this memcpy has no break and is entirely overwritten by case 1
-		//below, which is what keeps it correct - display_output is no longer 15bpp
-		//in libretro builds (see display_encode). Anything that makes this case
-		//stand on its own must re-derive the pixels from the screens, not copy
-		//them out of the display buffer.
-		memcpy(vdp.capture_buffer, vdp.display_output.get(), DISPLAY_WIDTH * sizeof(uint16_t));
+		//The blended output as displayed, backdrops included, in 15bpp (screen B
+		//alone in hi-res), from the same helpers as the display
+		report_once(RARE_CAPTURE_BLENDED, "scanline capture of the blended output (format 0) in use");
+		for (int x = seg_x0; x < seg_x1; x++)
+		{
+			capture_buffer_15bpp[x] = Common::bswp16(blended_pixel(x) & 0x7FFF);
+		}
+		break;
 	case 1:
 		//Capture screen A in 15bpp via the palette/backdrop
-		for (int x = 0; x < DISPLAY_WIDTH; x++)
+		for (int x = seg_x0; x < seg_x1; x++)
 		{
 			capture_buffer_15bpp[x] = Common::bswp16(read_screen(0, x));
 		}
@@ -855,12 +993,14 @@ static void display_capture(int y)
 	case 2:
 	case 3:
 		//Capture screen A in 8bpp
-		memcpy(vdp.capture_buffer, vdp.screens[0], DISPLAY_WIDTH * sizeof(uint8_t));
+		memcpy(vdp.capture_buffer + seg_x0, vdp.screens[0] + seg_x0, (size_t)(seg_x1 - seg_x0));
 		break;
 	default:
 		assert(0);
 	}
 }
+
+static void compose_line(int y);
 
 void draw_scanline(int y)
 {
@@ -871,8 +1011,40 @@ void draw_scanline(int y)
 
 	draw_layers(y);
 
+	if (!vdp.color_split_count)
+	{
+		compose_line(y);
+		return;
+	}
 
-	//Draw the screens to the display output buffer
+	//A palette or backdrop write while the line was drawn: each part of the line
+	//before it takes the colours in force until then
+	uint16_t palette_now[PALETTE_SIZE / 2];
+	uint16_t backdrops_now[2] = { vdp.backdrops[0], vdp.backdrops[1] };
+	memcpy(palette_now, vdp.palette_cache, sizeof(palette_now));
+	for (int i = 0; i < vdp.color_split_count; i++)
+	{
+		const auto& split = vdp.color_splits[i];
+		memcpy(vdp.palette_cache, split.palette, sizeof(palette_now));
+		vdp.backdrops[0] = split.backdrops[0];
+		vdp.backdrops[1] = split.backdrops[1];
+		seg_x1 = split.x_end;
+		compose_line(y);
+		seg_x0 = seg_x1;
+	}
+	memcpy(vdp.palette_cache, palette_now, sizeof(palette_now));
+	vdp.backdrops[0] = backdrops_now[0];
+	vdp.backdrops[1] = backdrops_now[1];
+	seg_x1 = DISPLAY_WIDTH;
+	compose_line(y);
+	seg_x0 = 0;
+}
+
+//Combine the screens into the display output buffer, for the pixels seg_x0 to
+//seg_x1, and capture them if this is the capture line
+static void compose_line(int y)
+{
+	//Combine the screens into the display output buffer
 	switch (vdp.dispmode)
 	{
 	case 0x00:
@@ -881,31 +1053,45 @@ void draw_scanline(int y)
 	case 0x01:
 		draw_color_math(y, true);
 		break;
+	case 0x02:
+		report_once(RARE_BLEND_A_ONLY, "blend mode 2 (screen A only) in use");
+		draw_screen_a_only(y);
+		break;
+	case 0x03:
+		report_once(RARE_BLEND_HIRES, "blend mode 3 (hi-res) in use: frames containing it are output 512 pixels wide");
+		draw_hires(y);
+		break;
 	case 0x04:
+		if (!vdp.color_prio.output_screen_b)
+		{
+			report_once(RARE_MODE4_TOP_OFF, "blend mode 4 with screen B off: B shows as transparent");
+		}
+		else if (vdp.color_prio.screen_b_backdrop_only)
+		{
+			report_once(RARE_MODE4_SBCOL, "blend mode 4 with SBCOL: screen B covers A with its backdrop colour");
+		}
 		draw_screen_overlay(y, true);
 		break;
 	case 0x05:
+		if (!vdp.color_prio.output_screen_a)
+		{
+			report_once(RARE_MODE5_TOP_OFF, "blend mode 5 with screen A off: A shows as transparent");
+		}
 		draw_screen_overlay(y, false);
 		break;
 	default:
-		assert(0);
+		report_once(RARE_BLEND_INVALID, "invalid blend mode (6 or 7) in use: picture is black");
+		draw_invalid_blend(y);
+		break;
 	}
 
 	if (vdp.capture_enable && y == vdp.capture_ctrl.scanline)
 	{
 		display_capture(y);
-		vdp.capture_enable = false;
-	}
-}
-
-void draw_border_scanline(int y)
-{
-	//Draw backdrop A to the whole scanline
-	//Note: y is relative to visible area!
-	uint16_t border_color = display_encode(vdp.backdrops[0]);
-	for (int x = 0; x < DISPLAY_WIDTH; x++)
-	{
-		write_color_raw(vdp.display_output, x, y, border_color);
+		if (seg_x1 == DISPLAY_WIDTH)
+		{
+			vdp.capture_enable = false;
+		}
 	}
 }
 

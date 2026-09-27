@@ -55,6 +55,8 @@ struct Port
 	struct Status
 	{
 		int tx_empty;
+		//TDRE read as 1 since it was set: only then does writing 0 clear it
+		int tx_empty_read;
 	};
 
 	Status status;
@@ -68,7 +70,10 @@ struct Port
 
 	void calc_cycles_per_bit()
 	{
-		assert(!mode.sync_mode);
+		if (mode.sync_mode)
+		{
+			LOG_UNEMULATED("[Serial] SCI clocked synchronous mode is not emulated");
+		}
 		cycles_per_bit = (32 << (mode.clock_factor * 2)) * (bit_factor + 1);
 	}
 
@@ -173,6 +178,7 @@ uint8_t read8(uint32_t addr)
 	{
 	case 0x04:
 		//TODO implement other status bits
+		port->status.tx_empty_read |= port->status.tx_empty;
 		value = port->status.tx_empty << 7;
 		break;
 	default:
@@ -199,7 +205,10 @@ void write8(uint32_t addr, uint8_t value)
 		port->mode.parity_enable = (value >> 5) & 0x1;
 		port->mode.seven_bit_mode = (value >> 6) & 0x1;
 		port->mode.sync_mode = (value >> 7) & 0x1;
-		assert(!(value & ~0x3));
+		if (value & ~0x3)
+		{
+			LOG_UNEMULATED("[Serial] SCI mode %02X: parity, 7-bit, 2 stop bits, multiprocessor and synchronous modes are not emulated", value);
+		}
 		break;
 	case 0x01:
 		Log::debug("[Serial] write port%d bitrate factor: %02X", port->id, value);
@@ -254,9 +263,10 @@ void write8(uint32_t addr, uint8_t value)
 		//TODO implement other status bits
 		Log::debug("[Serial] write port%d status: %02X", port->id, value);
 		bool new_empty = (value >> 7) & 0x1;
-		if(port->status.tx_empty && !new_empty)
+		if (port->status.tx_empty && port->status.tx_empty_read && !new_empty)
 		{
-			port->status.tx_empty &= new_empty;
+			port->status.tx_empty = false;
+			port->status.tx_empty_read = false;
 			if (!port->tx_bits_left)
 			{
 				//Space is available, start the timed transfer
@@ -266,7 +276,7 @@ void write8(uint32_t addr, uint8_t value)
 		break;
 	}
 	default:
-		assert(0);
+		LOG_UNEMULATED("[SCI] %s: register %03X is not emulated", __func__, (unsigned)(addr & 0xFFF));
 	}
 }
 

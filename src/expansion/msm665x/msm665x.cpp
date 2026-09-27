@@ -44,15 +44,9 @@ uint8_t vc_rp = 0;
 uint8_t vc_sm = 0;
 uint8_t cmd_status = 0;
 
-bool enable(uint32_t cart_checksum)
+void enable()
 {
-#ifdef LIMIT_TO_KNOWN_CARTS
-	enabled = EXPANSION_CARTS.count(cart_checksum) > 0;
-	Log::info("[MSM665] enabled for cart %X? %d\n", cart_checksum, enabled);
-#else
 	enabled = true;
-#endif
-	return enabled;
 }
 
 void reset_params()
@@ -106,8 +100,6 @@ void option_set(uint8_t data)
 	op_a |= (data >> 3) & 0x1;
 	computed_volume = (op_v ? 0.5f : 1.0f) * powf(0.5f, (float)vc_vl);
 
-	// Log::trace("[MSM665] option_set 0x%X op_v=%d op_s=%d op_a=%d", data, op_v, op_s, op_a);
-
 	Log::debug(
 		"[MSM665] Option set VOL=%s STANDBY=%s AOUT=%s", op_v ? "HALF" : "FULL", op_s ? "N" : "Y", op_a ? "DAC" : "LPF"
 	);
@@ -125,10 +117,8 @@ void voice_control(uint8_t data)
 	vc_vl = data & 0x3;
 	vc_rp = (data >> 2) & 0x3;
 	vc_sm = (data >> 4) & 0x1;
-	// Log::trace("[MSM665] voice_control 0x%X vc_vl=%d vc_rp=%d vc_sm=%d", data, vc_vl, vc_rp, vc_sm);
 
 	computed_volume = (op_v ? 0.5f : 1.0f) * powf(0.5f, (float)vc_vl);
-	// self.computed_volume = (0.5 if self.op_v else 1.0) * pow(0.5, self.vc_vl)
 	Log::debug(
 		"[MSM665] Voice control set VOL=%s REPEAT=%s SMOOTH=%s", VOLUME_STRS[vc_vl], REPEAT_STRS[vc_rp],
 		vc_sm ? "Y" : "N"

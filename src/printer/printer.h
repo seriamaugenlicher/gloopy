@@ -14,7 +14,8 @@ void shutdown();
 //no reason to make the player reload the game to change it
 void set_image_type(int image_type);
 
-bool motor_move_hook(uint32_t addr);
-bool printer_hook(uint32_t addr);
+//Also live: the directory is only consulted when the game prints, and an empty
+//one switches the printer off (the BIOS then reports no seal cartridge)
+void set_output_directory(const fs::path& dir);
 
 }  // namespace Printer

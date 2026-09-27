@@ -3,7 +3,7 @@
 #
 # The bundle is the GPL source drop: anyone can unpack it, host it in a repository
 # of their own, build it, and submit it to libretro without any dependence on the
-# original repo staying up. See HANDOFF.md.
+# original repo staying up.
 #
 # It is built with `git archive`, so it contains exactly the tracked files and
 # NOTHING gitignored — the internal working notes (CLAUDE.md, claudedocs/,

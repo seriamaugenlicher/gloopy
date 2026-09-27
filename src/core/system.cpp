@@ -18,6 +18,7 @@
 #include "core/sh2/peripherals/sh2_ocpm.h"
 #include "core/sh2/peripherals/sh2_pfc.h"
 #include "core/sh2/peripherals/sh2_serial.h"
+#include "core/sh2/peripherals/sh2_wdt.h"
 #include "core/sh2/peripherals/sh2_timers.h"
 #include "core/sh2/sh2.h"
 #include "core/timing.h"
@@ -48,6 +49,7 @@ void initialize(Config::SystemInfo& config)
 	Printer::initialize(config);
 
 	//Hook up connections between modules
+	SH2::OCPM::Serial::set_tx_callback(0, &LoopyIO::serial0_tx);
 	SH2::OCPM::Serial::set_tx_callback(1, &Sound::midi_byte_in);
 }
 
@@ -100,9 +102,8 @@ uint16_t* get_display_output()
 
 constexpr static uint32_t SAVE_STATE_MAGIC = SaveState::fourcc("LMSE");
 
-//Version 2: full uPD937 sound engine state is serialized (voices,
-//instruments, envelopes, MIDI queue) so audio resumes exactly on load
-constexpr static uint32_t SAVE_STATE_VERSION = 2;
+//Bumped whenever the layout changes; states of another version are rejected
+constexpr static uint32_t SAVE_STATE_VERSION = 39;
 
 void save_state(SaveState::Snapshot& ss)
 {
@@ -119,25 +120,13 @@ void save_state(SaveState::Snapshot& ss)
 	SH2::OCPM::DMAC::save_state(ss);
 	SH2::OCPM::PFC::save_state(ss);
 	SH2::OCPM::Serial::save_state(ss);
+	SH2::OCPM::WDT::save_state(ss);
 	SH2::OCPM::Timer::save_state(ss);
 	Timing::save_state(ss);
 	Video::save_state(ss);
 	LoopyIO::save_state(ss);
 	Sound::save_state(ss);
 	Expansion::save_state(ss);
-}
-
-bool save_state(const std::string& path)
-{
-	SaveState::Snapshot ss;
-	save_state(ss);
-
-	if (!ss.save_file(path))
-	{
-		Log::error("[System] failed to write save state to %s", path.c_str());
-		return false;
-	}
-	return true;
 }
 
 bool load_state(SaveState::Snapshot& ss)
@@ -168,6 +157,7 @@ bool load_state(SaveState::Snapshot& ss)
 		SH2::OCPM::DMAC::load_state(ss);
 		SH2::OCPM::PFC::load_state(ss);
 		SH2::OCPM::Serial::load_state(ss);
+		SH2::OCPM::WDT::load_state(ss);
 		SH2::OCPM::Timer::load_state(ss);
 		Timing::load_state(ss);
 		Video::load_state(ss);
@@ -182,18 +172,6 @@ bool load_state(SaveState::Snapshot& ss)
 	}
 
 	return true;
-}
-
-bool load_state(const std::string& path)
-{
-	SaveState::Snapshot ss;
-	if (!ss.load_file(path))
-	{
-		Log::error("[System] failed to read save state from %s", path.c_str());
-		return false;
-	}
-
-	return load_state(ss);
 }
 
 }  // namespace System

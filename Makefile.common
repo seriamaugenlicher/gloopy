@@ -17,6 +17,7 @@ SOURCES_CXX := \
 	$(CORE_DIR)/src/core/sh2/peripherals/sh2_ocpm.cpp \
 	$(CORE_DIR)/src/core/sh2/peripherals/sh2_pfc.cpp \
 	$(CORE_DIR)/src/core/sh2/peripherals/sh2_serial.cpp \
+	$(CORE_DIR)/src/core/sh2/peripherals/sh2_wdt.cpp \
 	$(CORE_DIR)/src/core/sh2/peripherals/sh2_timers.cpp \
 	$(CORE_DIR)/src/expansion/expansion.cpp \
 	$(CORE_DIR)/src/expansion/msm665x/msm665x.cpp \

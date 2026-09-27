@@ -12,7 +12,6 @@ inefficiencies and things that aren't structured well for C++.
 
 Game support notes:
 - PC Collection title screen goes a bit fast and some sounds get stuck (timing issue?)
-- Wanwan has no PCM sample support, and seems to crackle on dialog sfx (same timing issue?)
 */
 
 #include <common/wordops.h>
@@ -35,13 +34,21 @@ namespace Sound
 static Timing::FuncHandle timeref_func;
 static Timing::EventHandle timeref_ev;
 
+//The synth's buttons and volume switches (SOUND_CTRL) are a scanned panel: a state
+//is seen only once it has been held for a while. The BIOS holds each for 4 frames;
+//a press of a few microseconds is never seen on a console. 2 frames assumed.
+constexpr static int PANEL_HOLD_CYCLES = 2 * 267970;
+static Timing::FuncHandle panel_func;
+static Timing::EventHandle panel_ev;
+static uint16_t panel_pending;
+
 static std::unique_ptr<LoopySound::LoopySound> sound_engine;
 
-static int sample_rate;
+static double sample_rate;
 static int buffer_size;
 
-static bool mute = false;
-static float volume_level;	// Automatically managed by mute
+//Starts at silence and fades in over FADE_IN_MS, once per process
+static float volume_level;
 
 static void buffer_callback(float* buffer, uint32_t count);
 
@@ -92,6 +99,7 @@ void render(int16_t* output, uint32_t stereo_frames)
 /* libretro-specific code end */
 
 static void timeref(uint64_t param, int cycles_late);
+static void panel_seen(uint64_t param, int cycles_late);
 
 void initialize(std::vector<uint8_t>& sound_rom)
 {
@@ -99,18 +107,18 @@ void initialize(std::vector<uint8_t>& sound_rom)
 	{
 		//No audio device to open: the frontend consumes whatever render()
 		//produces. The engine's smoothing window is one video frame.
-		sample_rate = TARGET_SAMPLE_RATE;
+		sample_rate = output_sample_rate();
 		buffer_size = SAMPLES_PER_FRAME;
 
 		sound_engine = std::make_unique<LoopySound::LoopySound>(sound_rom, (float)sample_rate, buffer_size);
 
-		if (TIMEREF_ENABLE)
-		{
-			Log::debug("[Sound] Schedule timeref %d Hz", TIMEREF_FREQUENCY);
-			timeref_func = Timing::register_func("Sound::timeref", timeref);
-			timeref(0, 0);
-		}
+		Log::debug("[Sound] Schedule timeref %d Hz", TIMEREF_FREQUENCY);
+		timeref_func = Timing::register_func("Sound::timeref", timeref);
+		timeref(0, 0);
 	}
+	panel_func = Timing::register_func("Sound::panel", panel_seen);
+	panel_ev = Timing::EventHandle();
+	panel_pending = 0;
 }
 
 void shutdown()
@@ -122,34 +130,40 @@ void shutdown()
 
 uint8_t ctrl_read8(uint32_t addr)
 {
-	assert(0);
+	LOG_UNEMULATED("[Sound] %s: register %03X is not emulated", __func__, (unsigned)(addr & 0xFFF));
 	return 0;
 }
 
 uint16_t ctrl_read16(uint32_t addr)
 {
-	assert(0);
+	LOG_UNEMULATED("[Sound] %s: register %03X is not emulated", __func__, (unsigned)(addr & 0xFFF));
 	return 0;
 }
 
 uint32_t ctrl_read32(uint32_t addr)
 {
-	assert(0);
+	LOG_UNEMULATED("[Sound] %s: register %03X is not emulated", __func__, (unsigned)(addr & 0xFFF));
 	return 0;
 }
 
 void ctrl_write8(uint32_t addr, uint8_t value)
 {
-	assert(0);
+	LOG_UNEMULATED("[Sound] %s: register %03X is not emulated", __func__, (unsigned)(addr & 0xFFF));
 }
 
 void ctrl_write16(uint32_t addr, uint16_t value)
 {
 	value &= 0xFFF;
-	if (sound_engine)
+	if (value == panel_pending)
 	{
-		sound_engine->set_control_register(value);
+		return;
 	}
+	panel_pending = value;
+	if (panel_ev.is_valid())
+	{
+		Timing::cancel_event(panel_ev);
+	}
+	panel_ev = Timing::add_event(panel_func, Timing::convert_cpu(PANEL_HOLD_CYCLES), 0, Timing::CPU_TIMER);
 }
 
 void ctrl_write32(uint32_t addr, uint32_t value)
@@ -159,18 +173,10 @@ void ctrl_write32(uint32_t addr, uint32_t value)
 
 void midi_byte_in(uint8_t value)
 {
-	//Log::debug("[Sound] MIDI byte %02X", value);
-	//fflush(stdout);
 	if (sound_engine)
 	{
 		sound_engine->midi_in((char)value);
 	}
-}
-
-void set_mute(bool mute_in)
-{
-	mute = mute_in;
-	Log::debug("[Sound] %s output", mute_in ? "Muted" : "Unmuted");
 }
 
 void set_mix_level(float level)
@@ -178,6 +184,15 @@ void set_mix_level(float level)
 	if (sound_engine)
 	{
 		sound_engine->set_mix_level(level);
+	}
+}
+
+static void panel_seen(uint64_t, int)
+{
+	panel_ev = Timing::EventHandle();
+	if (sound_engine)
+	{
+		sound_engine->set_control_register(panel_pending);
 	}
 }
 
@@ -193,17 +208,8 @@ static void timeref(uint64_t param, int cycles_late)
 
 static void update_volume_level()
 {
-	if (MUTE_FADE_MS > 0)
-	{
-		float delta = 1000.f / (sample_rate * MUTE_FADE_MS);
-		if (mute) delta = -delta;
-		volume_level += delta;
-		volume_level = std::clamp(volume_level, 0.f, 1.f);
-	}
-	else
-	{
-		volume_level = mute ? 0.f : 1.f;
-	}
+	float delta = 1000.f / (sample_rate * FADE_IN_MS);
+	volume_level = std::clamp(volume_level + delta, 0.f, 1.f);
 }
 
 static void buffer_callback(float* sample_buffer, uint32_t sample_count)
@@ -381,6 +387,8 @@ void wav_stop()
 void save_state(SaveState::Snapshot& ss)
 {
 	ss.begin_section(SaveState::fourcc("SND "));
+	ss.write(panel_pending);
+	ss.write(panel_ev);
 	uint8_t has_engine = (sound_engine != nullptr);
 	ss.write(has_engine);
 
@@ -399,6 +407,8 @@ void save_state(SaveState::Snapshot& ss)
 void load_state(SaveState::Snapshot& ss)
 {
 	ss.expect_section(SaveState::fourcc("SND "));
+	ss.read(panel_pending);
+	ss.read(panel_ev);
 	uint8_t had_engine;
 	ss.read(had_engine);
 
@@ -424,10 +434,7 @@ void load_state(SaveState::Snapshot& ss)
 		//re-kick the timeref event chain since it isn't in the restored
 		//scheduler queue.
 		sound_engine->silence();
-		if (TIMEREF_ENABLE)
-		{
-			timeref(0, 0);
-		}
+		timeref(0, 0);
 	}
 }
 

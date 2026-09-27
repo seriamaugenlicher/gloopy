@@ -28,6 +28,10 @@ Game support notes:
 namespace LoopySound
 {
 
+//Unhandled MIDI messages already reported: controller numbers 0-127, then key pressure
+//(128) and channel pressure (129). Each is logged once per session of the core.
+static bool unhandled_reported[130];
+
 UPD937_Core::UPD937_Core(std::vector<uint8_t> &rom_in, float synthesis_rate)
 {
 	// Pad ROM to a power of 2
@@ -207,24 +211,35 @@ void UPD937_Core::process_midi_now(char midi_byte)
 							note_off(channel, midi_param_bytes[0]);
 						break;
 					case 0xA:
-						Log::warn("[Sound] unhandled message KEY PRESSURE");
+						if (!unhandled_reported[128])
+						{
+							unhandled_reported[128] = true;
+							Log::warn("[Sound] unhandled message KEY PRESSURE (not reported again)");
+						}
 						break;
 					case 0xB:
 						if (midi_param_bytes[0] == 0x40)
 						{
 							control_chg_sustain(channel, (midi_param_bytes[1] >= 0x40));
 						}
-						else
+						else if (!unhandled_reported[midi_param_bytes[0] & 0x7F])
 						{
-							Log::warn("[Sound] unhandled message CONTROL CHANGE %02X %02X", midi_param_bytes[0],
-									  midi_param_bytes[1]);
+							//Once per controller number: a MIDI driver typically resends the same
+							//dozen controllers with every song, which otherwise floods the log
+							unhandled_reported[midi_param_bytes[0] & 0x7F] = true;
+							Log::warn("[Sound] unhandled message CONTROL CHANGE %02X %02X (not reported again)",
+									  midi_param_bytes[0], midi_param_bytes[1]);
 						}
 						break;
 					case 0xC:
 						prog_chg(channel, midi_param_bytes[0]);
 						break;
 					case 0xD:
-						Log::warn("[Sound] unhandled message CHANNEL PRESSURE");
+						if (!unhandled_reported[129])
+						{
+							unhandled_reported[129] = true;
+							Log::warn("[Sound] unhandled message CHANNEL PRESSURE (not reported again)");
+						}
 						break;
 					case 0xE:
 						pitch_bend(channel, (midi_param_bytes[1] << 1) | (midi_param_bytes[1] >> 6));
@@ -774,6 +789,14 @@ void LoopySound::set_control_register(int creg)
 	int buttons = creg & 63;
 	int buttons_pushed = buttons & (~buttons_last);
 	buttons_last = buttons;
+	if (buttons_pushed & 16)
+	{
+		powered = true;
+	}
+	if (!powered)
+	{
+		return;
+	}
 	// Check button pushes with priority order
 	if ((buttons_pushed & 16) > 0)
 	{
@@ -820,7 +843,7 @@ void LoopySound::set_control_register(int creg)
 bool LoopySound::midi_in(char b)
 {
 	// temporarily ignore midi here when in demo or keyboard mode
-	if (in_demo || (channel_config_state == 0)) return true;
+	if (!powered || in_demo || (channel_config_state == 0)) return true;
 	return enqueue_midi_byte(b, time_reference_samples);
 }
 
@@ -1032,6 +1055,7 @@ void LoopySound::save_state(SaveState::Snapshot& ss)
 
 	ss.write(buttons_last);
 	ss.write(channel_config_state);
+	ss.write(powered);
 	ss.write(in_demo);
 
 	ss.write_blob(midi_queue_bytes, sizeof(midi_queue_bytes));
@@ -1077,6 +1101,7 @@ void LoopySound::load_state(SaveState::Snapshot& ss)
 
 	ss.read(buttons_last);
 	ss.read(channel_config_state);
+	ss.read(powered);
 	ss.read(in_demo);
 
 	ss.read_blob(midi_queue_bytes, sizeof(midi_queue_bytes));

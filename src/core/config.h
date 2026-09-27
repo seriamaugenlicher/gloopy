@@ -13,7 +13,6 @@ struct CartInfo
 {
 	std::vector<uint8_t> rom;
 	std::vector<uint8_t> sram;
-	std::string sram_file_path;
 	std::string rom_path;
 
 	bool is_loaded()
@@ -25,10 +24,7 @@ struct CartInfo
 struct EmulatorOpts
 {
 	fs::path image_save_directory;
-	int screenshot_image_type;
 	int printer_image_type;
-	bool printer_correct_aspect_ratio;
-	std::string printer_view_command;
 };
 
 struct SystemInfo

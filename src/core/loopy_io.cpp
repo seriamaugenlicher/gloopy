@@ -1,5 +1,6 @@
 #include <common/wordops.h>
 #include <core/loopy_io.h>
+#include <core/timing.h>
 #include <input/input.h>
 #include <log/log.h>
 
@@ -27,18 +28,73 @@ struct MouseState
 struct State
 {
 	uint16_t latched_sensors;
-	uint16_t print_temp;
+	uint16_t print_temp;  //ANALOG_IN as read: the reading in bits 15-6, then adc_ctrl
+	uint16_t adc_ctrl;
 	PadState pad;
 	MouseState mouse;
 	bool scan_pad;
 	bool scan_mouse;
+	uint16_t control_out;  //CONTROL_OUT: the port's output pins in direct mode
+	int64_t out5_high_since;  //when output 5 last went high
 };
 
 static State state;
 
+//Homebrew debug console: one character per 16-bit store to the unused register
+//0x0F0 (0x0C05D0F0), logged a line at a time as "[Console] ...". SCI0's transmit
+//is logged the same way as "[Serial] ...".
+struct LineLog
+{
+	const char* tag;
+	char line[256];
+	size_t len;
+
+	void putc(uint8_t c)
+	{
+		if (c == '\r')
+		{
+			return;
+		}
+		if (c == '\n' || len == sizeof(line) - 1)
+		{
+			line[len] = 0;
+			Log::info("[%s] %s", tag, line);
+			len = 0;
+			if (c == '\n')
+			{
+				return;
+			}
+		}
+		line[len++] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+	}
+};
+
+static LineLog console_log = { "Console" };
+static LineLog serial_log = { "Serial" };
+
+static void console_putc(uint8_t c)
+{
+	console_log.putc(c);
+}
+
+void serial0_tx(uint8_t c)
+{
+	serial_log.putc(c);
+}
+
+//Unmapped registers are reported once each: a program polling one every frame
+//otherwise buries the log.
+static bool unmapped_reported[0x800];
+
 void initialize()
 {
 	state = {};
+	console_log.len = 0;
+	serial_log.len = 0;
+	for (bool& r : unmapped_reported)
+	{
+		r = false;
+	}
 }
 
 void shutdown()
@@ -49,6 +105,23 @@ void shutdown()
 uint8_t reg_read8(uint32_t addr)
 {
 	READ_HALFWORD(reg, addr);
+}
+
+//Direct controller mode with a gamepad and nothing pressed, as measured: outputs 0
+//or 1 alone set input 0 in CONTROL_IN[0]'s low byte; all six set it in both bytes,
+//the high byte only once output 5 has been high for about 3000 cycles. Button
+//presses in direct mode are not emulated.
+constexpr int64_t DIRECT_PAD_SETTLE = 3000;
+
+static uint16_t direct_pad_in0()
+{
+	uint16_t out = state.control_out & 0x3F;
+	uint16_t value = (out & 0x03) ? 0x0001 : 0;
+	if (out == 0x3F && Timing::get_timestamp(Timing::CPU_TIMER) - state.out5_high_since >= DIRECT_PAD_SETTLE)
+	{
+		value |= 0x0100;
+	}
+	return value;
 }
 
 uint16_t reg_read16(uint32_t addr)
@@ -63,9 +136,13 @@ uint16_t reg_read16(uint32_t addr)
 		{
 			return ((state.pad.buttons << 4) & 0x0F00) | (state.pad.buttons & 0x000E) | 0x0001;
 		}
+		else if (!state.scan_pad && state.pad.plugged && !state.mouse.plugged)
+		{
+			return direct_pad_in0();
+		}
 		else if (state.mouse.plugged)
 		{
-			uint16_t mb = ((~state.mouse.buttons) & 0x7000) | 0x8000;
+			uint16_t mb = ((~state.mouse.buttons) & 0x5000) | 0x8000;
 			return mb | (mb >> 8);
 		}
 		return 0;
@@ -76,7 +153,7 @@ uint16_t reg_read16(uint32_t addr)
 		}
 		else if (state.mouse.plugged)
 		{
-			uint16_t mb = ((~state.mouse.buttons) & 0x7000) | 0x8000;
+			uint16_t mb = ((~state.mouse.buttons) & 0x5000) | 0x8000;
 			return mb | (mb >> 8);
 		}
 		return 0;
@@ -87,18 +164,32 @@ uint16_t reg_read16(uint32_t addr)
 		}
 		else if (state.mouse.plugged)
 		{
-			uint16_t mb = ((~state.mouse.buttons) & 0x7000) | 0x8000;
+			uint16_t mb = ((~state.mouse.buttons) & 0x5000) | 0x8000;
 			return mb | (mb >> 8);
 		}
 		return 0;
 	case 0x030:
 		return state.latched_sensors;
+	//Documented registers with nothing emulated behind them (see reg_write16). They
+	//read as 0 without a warning, since retail games touch them routinely.
+	case 0x020:
+	case 0x040:
+	case 0x042:
+	case 0x044:
+	case 0x054:
+		return 0;
 	case 0x050:
 		if (state.scan_mouse && state.mouse.plugged)
 		{
 			uint16_t mouse_xreg = state.mouse.counter_x & 0xFFF;
 			state.mouse.counter_x = 0;
-			mouse_xreg |= (state.mouse.buttons & (Input::MOUSE_L | Input::MOUSE_R));
+			//The buttons are active-low: an idle mouse reads 5000 on a console
+			mouse_xreg |= (~state.mouse.buttons & (Input::MOUSE_L | Input::MOUSE_R));
+			//With the pad scanned too, the counters stay 0 on a console
+			if (state.scan_pad)
+			{
+				mouse_xreg &= 0xF000;
+			}
 			return mouse_xreg;
 		}
 		return 0;
@@ -107,7 +198,7 @@ uint16_t reg_read16(uint32_t addr)
 		{
 			uint16_t mouse_yreg = state.mouse.counter_y & 0xFFF;
 			state.mouse.counter_y = 0;
-			return mouse_yreg;
+			return state.scan_pad ? 0 : mouse_yreg;
 		}
 		return 0;
 	default:
@@ -136,8 +227,37 @@ void reg_write16(uint32_t addr, uint16_t value)
 		//Without this break the sensor latch fell through into the default case, so
 		//every legitimate write to it was reported as an unmapped one
 		break;
+	//Documented, accepted and ignored (retail games write them):
+	//  020 EXP_TIMING     expansion strobe timing, which has no emulated effect
+	//  040-044            print head data, motor and head control; printing is done
+	//                     by a BIOS hook, so the mechanism's drive signals do nothing
+	case 0x000:
+		//Channel select (bits 5-3) and auto-sampling control (bits 2-0, not
+		//emulated); the reading changes on the next conversion
+		state.adc_ctrl = value & 0x3F;
+		state.print_temp = (state.print_temp & 0xFFC0) | state.adc_ctrl;
+		break;
+	case 0x054:
+		if ((value & 0x20) && !(state.control_out & 0x20))
+		{
+			state.out5_high_since = Timing::get_timestamp(Timing::CPU_TIMER);
+		}
+		state.control_out = value & 0x3F;
+		break;
+	case 0x020:
+	case 0x040:
+	case 0x042:
+	case 0x044:
+		break;
+	case 0x0F0:
+		console_putc((uint8_t)value);
+		break;
 	default:
-		Log::warn("[IO] unmapped write16 %08X: %04X", addr, value);
+		if (!unmapped_reported[addr >> 1])
+		{
+			unmapped_reported[addr >> 1] = true;
+			Log::warn("[IO] unmapped write16 %08X: %04X (not reported again)", addr, value);
+		}
 	}
 }
 
@@ -208,7 +328,10 @@ void save_state(SaveState::Snapshot& ss)
 	ss.begin_section(SaveState::fourcc("LPIO"));
 	ss.write(state.latched_sensors);
 	ss.write(state.print_temp);
+	ss.write(state.adc_ctrl);
 	ss.write(state.scan_pad);
+	ss.write(state.control_out);
+	ss.write(state.out5_high_since);
 	ss.write(state.scan_mouse);
 	ss.write(state.pad);
 	ss.write(state.mouse);
@@ -219,7 +342,10 @@ void load_state(SaveState::Snapshot& ss)
 	ss.expect_section(SaveState::fourcc("LPIO"));
 	ss.read(state.latched_sensors);
 	ss.read(state.print_temp);
+	ss.read(state.adc_ctrl);
 	ss.read(state.scan_pad);
+	ss.read(state.control_out);
+	ss.read(state.out5_high_since);
 	ss.read(state.scan_mouse);
 
 	//Controller plugged/button state reflects the live inputs of this session,
@@ -230,11 +356,14 @@ void load_state(SaveState::Snapshot& ss)
 	ss.read(saved_mouse);
 }
 
+//A conversion of the selected ADC channel, with readings from a console at room
+//temperature: head thermistor, head calibration resistor, contrast knob and the
+//two cartridge inputs. Channels 5-7 select channel 4.
 void update_print_temp()
 {
-	float temp = 22.f;
-	int bits_temp = std::clamp((int)(temp * 16), 0, 0x3FF);
-	state.print_temp = bits_temp << 6;
+	static const uint16_t readings[5] = { 0x14A, 0x234, 0x205, 0x003, 0x002 };
+	int ch = std::min((state.adc_ctrl >> 3) & 0x7, 4);
+	state.print_temp = (uint16_t)(readings[ch] << 6) | state.adc_ctrl;
 }
 
 void update_sensors()

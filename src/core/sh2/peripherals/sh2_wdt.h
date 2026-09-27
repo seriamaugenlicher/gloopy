@@ -3,17 +3,16 @@
 
 #include "core/savestate.h"
 
-namespace SH2::OCPM::PFC
+namespace SH2::OCPM::WDT
 {
 
 void initialize();
 
+//addr is the offset from 0x5FFFFB8: 0 TCSR, 1 TCNT, 3 RSTCSR (reads, bytes);
+//0 and 2 for the keyed word writes
+uint8_t read8(uint32_t addr);
 uint16_t read16(uint32_t addr);
-
 void write16(uint32_t addr, uint16_t value);
-
-//PA13 is set to DREQ0 (PACR1 bits 11-10 = 11), as the BIOS leaves it
-bool pa13_is_dreq0();
 
 void save_state(SaveState::Snapshot& ss);
 void load_state(SaveState::Snapshot& ss);

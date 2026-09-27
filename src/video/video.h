@@ -12,6 +12,11 @@ namespace Video
 
 constexpr static int DISPLAY_WIDTH = 0x100;
 
+//A frame containing a hi-res scanline (blend mode 3) is output this wide. The
+//picture keeps its physical width: each of the 256 pixels becomes two half-pixels,
+//screen A then screen B, so the VDP's 256 columns carry 512.
+constexpr static int HIRES_DISPLAY_WIDTH = 0x200;
+
 //Output is always 240 lines tall, even in 224-line mode
 constexpr static int DISPLAY_HEIGHT = 0xF0;
 
@@ -56,6 +61,11 @@ constexpr static int DMA_CTRL_END = 0x0405F000;
 constexpr static int DMA_START = 0x0405F000;
 constexpr static int DMA_END = 0x04060000;
 
+//SYNC_CALIBRATE, VIDEO_DEBUG and RASTER_DEBUG: write-only, and ignored. The BIOS
+//writes SYNC_CALIBRATE at boot; the megadoc says emulators should ignore all three.
+constexpr static int DEBUG_REG_START = 0x04060000;
+constexpr static int DEBUG_REG_END = 0x04061000;
+
 constexpr static int OBJ_COUNT = 128;
 
 void initialize();
@@ -63,6 +73,15 @@ void shutdown();
 
 void start_frame();
 bool check_frame_end();
+//BM_MEM_CTRL fast mode: bitmap VRAM accesses a cycle shorter
+bool bitmap_fast_access();
+//Cycles an access to bitmap VRAM starting now waits for the VDP
+int bitmap_wait_cycles();
+//Debug Log File: report, once per session, a tile VRAM access or palette read
+//made while the picture is drawn, which snows on a console but is not drawn here
+extern bool snow_reports;
+void set_snow_reports(bool enabled);
+void note_snow_access(uint32_t offset, bool write);
 
 //Skip per-scanline compositing for this frame (used by frameskip)
 void set_render_enabled(bool enabled);
@@ -70,6 +89,16 @@ void set_render_enabled(bool enabled);
 int get_display_scanlines();
 uint16_t get_background_color();
 uint16_t* get_display_output();
+
+//True when a scanline composited this frame used hi-res blending (mode 3). Such
+//a frame must be delivered HIRES_DISPLAY_WIDTH wide, via compose_hires_frame.
+bool frame_has_hires();
+
+//Assembles this frame at HIRES_DISPLAY_WIDTH: hi-res scanlines as composited,
+//every other composited scanline pixel-doubled, placed `top` rows down, and every
+//other row up to `height` filled with `fill` (RGB565). Returns the buffer,
+//HIRES_DISPLAY_WIDTH pixels per row.
+uint16_t* compose_hires_frame(int drawn, int height, uint16_t fill, int top);
 
 void save_state(SaveState::Snapshot& ss);
 void load_state(SaveState::Snapshot& ss);
@@ -154,5 +183,13 @@ uint32_t dma_read32(uint32_t addr);
 void dma_write8(uint32_t addr, uint8_t value);
 void dma_write16(uint32_t addr, uint16_t value);
 void dma_write32(uint32_t addr, uint32_t value);
+
+uint8_t debug_read8(uint32_t addr);
+uint16_t debug_read16(uint32_t addr);
+uint32_t debug_read32(uint32_t addr);
+
+void debug_write8(uint32_t addr, uint8_t value);
+void debug_write16(uint32_t addr, uint16_t value);
+void debug_write32(uint32_t addr, uint32_t value);
 
 }  // namespace Video

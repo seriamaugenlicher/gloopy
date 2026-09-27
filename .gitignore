@@ -14,6 +14,7 @@ scripts/local-env.sh
 
 # Local working notes - NOT for publication
 CLAUDE.md
+AGENTS.md
 claudedocs/
 notes-local/
 *.local.md
@@ -29,3 +30,11 @@ out/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Test ROMs and third-party reference material - NOT for publication.
+# ROMS/ holds test content; reference/ and documents/ hold other people's source
+# and hardware documentation (e.g. the MiSTer Loopy core), which is not ours
+# to redistribute in this repo.
+ROMS/
+reference/
+documents/

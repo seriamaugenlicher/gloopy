@@ -12,6 +12,7 @@
 #include "core/sh2/peripherals/sh2_pfc.h"
 #include "core/sh2/peripherals/sh2_serial.h"
 #include "core/sh2/peripherals/sh2_timers.h"
+#include "core/sh2/peripherals/sh2_wdt.h"
 
 namespace SH2::OCPM
 {
@@ -27,6 +28,12 @@ constexpr static int DMAC_END = 0xF80;
 
 constexpr static int INTC_START = 0xF84;
 constexpr static int INTC_END = 0xF90;
+
+constexpr static int WDT_START = 0xFB8;
+constexpr static int WDT_END = 0xFBC;
+
+constexpr static int BSC_START = 0xFA0;
+constexpr static int BSC_END = 0xFB4;
 
 constexpr static int PFC_START = 0xFC0;
 constexpr static int PFC_END = 0xFF8;
@@ -64,6 +71,11 @@ uint8_t io_read8(uint32_t addr)
 		return INTC::read8(addr);
 	}
 
+	if (addr >= WDT_START && addr < WDT_END)
+	{
+		return WDT::read8(addr - WDT_START);
+	}
+
 	READ_HALFWORD(io, addr);
 }
 
@@ -89,6 +101,17 @@ uint16_t io_read16(uint32_t addr)
 	if (addr >= PFC_START && addr < PFC_END)
 	{
 		return PFC::read16(addr);
+	}
+
+	if (addr >= WDT_START && addr < WDT_END)
+	{
+		return WDT::read16(addr - WDT_START);
+	}
+
+	//Bus state controller (see io_write16): nothing reads meaning back from it
+	if (addr >= BSC_START && addr < BSC_END)
+	{
+		return 0;
 	}
 
 	switch (addr)
@@ -156,11 +179,21 @@ void io_write16(uint32_t addr, uint16_t value)
 		return;
 	}
 
+	if (addr >= WDT_START && addr < WDT_END)
+	{
+		WDT::write16(addr - WDT_START, value);
+		return;
+	}
+
+	//Bus state controller: the BIOS sets it up at boot. Wait states and refresh
+	//are modelled in sh2_bus.cpp, so the writes are ignored.
+	if (addr >= BSC_START && addr < BSC_END)
+	{
+		return;
+	}
+
 	switch (addr)
 	{
-	case 0xFB8:
-		//Prevent log spam for WDT_TCSR
-		return;
 	default:
 		Log::warn("[OCPM] unmapped write %08X: %04X", addr, value);
 	}

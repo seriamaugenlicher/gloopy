@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+
 namespace Log
 {
 
@@ -25,3 +27,18 @@ void warn(const char *fmt, ...);
 void error(const char *fmt, ...);
 
 }  // namespace Log
+
+//Hardware the core does not emulate. Debug builds stop here; release builds warn
+//once per place per session, so a program that relies on it (homebrew tried in the
+//emulator before a console) is told that a console may behave differently
+#define LOG_UNEMULATED(...)                  \
+	do                                       \
+	{                                        \
+		assert(0);                           \
+		static bool unemulated_reported_;    \
+		if (!unemulated_reported_)           \
+		{                                    \
+			unemulated_reported_ = true;     \
+			Log::warn(__VA_ARGS__);          \
+		}                                    \
+	} while (0)

@@ -12,7 +12,6 @@ inefficiencies and things that aren't structured well for C++.
 
 Game support notes:
 - PC Collection some sounds get stuck (appears to be a CPU timing issue)
-- Wanwan has no PCM sample support (OKI MSM6653) yet
 */
 
 #pragma once
@@ -57,7 +56,6 @@ constexpr static int  WORKAROUND_SAMPLE_WRAP_MIN = -0x760;
 constexpr static int  WORKAROUND_SAMPLE_WRAP_MAX = 0x7FE;
 
 /* Audio synthesis parameters end*/
-
 
 // Temporary hardcoded stuff
 constexpr static int HC_RATETABLE = 0x1000;
@@ -233,6 +231,9 @@ private:
 	// Interface state
 	int buttons_last = 0;
 	int channel_config_state = 0;
+	//Off until its ON button is pressed: the BIOS presses it first, and a console
+	//stays silent without it
+	bool powered = false;
 	bool in_demo = false;
 
 	// MIDI retiming queue

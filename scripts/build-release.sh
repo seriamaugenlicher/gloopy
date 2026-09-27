@@ -2,12 +2,19 @@
 # Build the release core for every platform into dist/.
 #
 # Toolchain locations come from the environment, so that no machine's paths are
-# baked into this repository. Put yours in scripts/local-env.sh (gitignored):
+# baked into this repository. Put yours in scripts/local-env.sh (gitignored).
 #
+# On Windows (MSYS2 / Git Bash):
 #   MINGW_BIN=/c/msys64/mingw64/bin
 #   ANDROID_NDK=/e/tools/android-ndk-r27c
 #   ZIG=/e/tools/zig/zig.exe
 #   MAKE_BIN=mingw32-make        # MSYS2 ships no plain 'make' in mingw64
+#
+# On Linux:
+#   ANDROID_NDK=/path/to/android-ndk-r27c     # the linux-x86_64 NDK
+#   ZIG=/path/to/zig                          # the Linux zig
+#   The Windows core is cross-built with x86_64-w64-mingw32-g++ from PATH
+#   (Debian/Ubuntu: g++-mingw-w64-x86-64-posix); MINGW_BIN is not needed.
 #
 # Build only some targets by naming them:  ./scripts/build-release.sh linux-aarch64
 # Targets: windows linux-aarch64 linux-x86_64 android-arm64 android-arm
@@ -49,8 +56,21 @@ want() {
 have() { [ -n "${!1:-}" ] || { echo "skip $2: \$$1 is not set"; return 1; }; }
 build() { echo; echo "=== $1 ==="; shift; "$MAKE_BIN" -j"$JOBS" "$@"; }
 
-if want windows && have MINGW_BIN windows; then
-	build "windows x86_64" platform=win
+case "$(uname -s)" in
+	MINGW*|MSYS*|CYGWIN*) HOST_WIN=1; NDK_HOST=windows-x86_64 ;;
+	Darwin*)              HOST_WIN=0; NDK_HOST=darwin-x86_64 ;;
+	*)                    HOST_WIN=0; NDK_HOST=linux-x86_64 ;;
+esac
+
+if want windows; then
+	if [ "$HOST_WIN" -eq 1 ]; then
+		have MINGW_BIN windows && build "windows x86_64" platform=win
+	elif command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
+		# The Makefile picks the mingw-w64 cross compiler itself off Windows
+		build "windows x86_64" platform=win
+	else
+		echo "skip windows: x86_64-w64-mingw32-g++ not found"
+	fi
 fi
 
 if want linux-aarch64 && have ZIG linux-aarch64; then
@@ -72,13 +92,13 @@ if want linux-x86_64 && have ZIG linux-x86_64; then
 fi
 
 if want android-arm64 && have ANDROID_NDK android-arm64; then
-	build "android arm64" platform=android_arm64 ANDROID_NDK="$ANDROID_NDK" \
+	build "android arm64" platform=android_arm64 ANDROID_NDK="$ANDROID_NDK" NDK_HOST="$NDK_HOST" \
 		OPTIMIZE="$ARM_CLANG" OPTIMIZE_LD="-O3 -flto -mcpu=cortex-a53"
 	mv "$DIST/gloopy_libretro_android.so" "$DIST/gloopy_libretro_android_arm64.so"
 fi
 
 if want android-arm && have ANDROID_NDK android-arm; then
-	build "android armv7" platform=android_arm ANDROID_NDK="$ANDROID_NDK" \
+	build "android armv7" platform=android_arm ANDROID_NDK="$ANDROID_NDK" NDK_HOST="$NDK_HOST" \
 		OPTIMIZE="-O3 -flto -DNDEBUG" OPTIMIZE_LD="-O3 -flto"
 	mv "$DIST/gloopy_libretro_android.so" "$DIST/gloopy_libretro_android_arm.so"
 fi

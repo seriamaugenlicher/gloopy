@@ -26,6 +26,9 @@ void update_mouse_position(int delta_x, int delta_y);
 void set_controller_scan_mode(bool scan_pad, bool scan_mouse);
 void set_controller_plugged(bool plugged_pad, bool plugged_mouse);
 
+//SCI0 transmit, logged a line at a time
+void serial0_tx(uint8_t c);
+
 void update_print_temp();
 void update_sensors();
 

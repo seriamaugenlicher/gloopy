@@ -37,6 +37,11 @@ struct retro_core_option_v2_category option_cats_us[] = {
       "Performance",
       "Speed-up options for slower hardware."
    },
+   {
+      "debug",
+      "Debugging",
+      "Logging for testing homebrew."
+   },
    { NULL, NULL, NULL },
 };
 
@@ -55,6 +60,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { NULL, NULL },
       },
       "enabled"
+   },
+   {
+      "loopy_refresh_rate",
+      "Video > Refresh Rate",
+      "Refresh Rate",
+      "60 Hz plays smoothly on a standard display. 59.83 Hz is the console's exact rate. Restart to take effect.",
+      NULL,
+      "video",
+      {
+         { "hardware", "59.83 Hz (hardware)" },
+         { "60",       "60 Hz" },
+         { NULL, NULL },
+      },
+      "hardware"
    },
 
    /* Audio */
@@ -79,16 +98,16 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "loopy_input_device",
       "Peripherals > Input Device",
       "Input Device",
-      "The Loopy has a single controller port, so a gamepad and a Loopy Mouse cannot be plugged in at the same time. However, Gloopy can simulate using both at once.",
+      "Which device is plugged into the Loopy's single controller port. Only one device can be used at a time. Restart to take effect.",
       NULL,
       "peripheral",
       {
-         { "auto",       "Controller + Mouse" },
-         { "controller", "Controller only" },
-         { "mouse",      "Mouse only" },
+         { "controller",    "Controller" },
+         { "mouse",         "Mouse" },
+         { "virtual_mouse", "Virtual Mouse (Controller)" },
          { NULL, NULL },
       },
-      "auto"
+      "controller"
    },
    {
       "loopy_mouse_sensitivity",
@@ -112,7 +131,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "loopy_seal_format",
       "Peripherals > Seal Sticker Format",
       "Seal Sticker Format",
-      "The image format printed seals are saved in. PNG suits them: a seal is flat-coloured pixel art, which PNG stores exactly and compresses to a fraction of the size, and it is what frontends save screenshots as. BMP is uncompressed and offered for anything that cannot read a PNG.",
+      "The image format printed seals are saved as.",
       NULL,
       "peripheral",
       {
@@ -126,7 +145,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "loopy_printer",
       "Peripherals > Seal Printer",
       "Seal Printer",
-      "Emulates the Loopy's built-in seal (sticker) printer. Prints are saved as BMP images in the frontend's save directory. Requires restart.",
+      "Emulates the Loopy's built-in sticker printer. Images are saved to the frontend's saves directory.",
       NULL,
       "peripheral",
       {
@@ -164,6 +183,22 @@ struct retro_core_option_v2_definition option_defs_us[] = {
          { "auto",     "auto (up to 3 frames)" },
          { "1",        "fixed: skip 1 of every 2" },
          { "3",        "fixed: skip 3 of every 4" },
+         { NULL, NULL },
+      },
+      "disabled"
+   },
+
+   /* Debugging */
+   {
+      "loopy_debug_log",
+      "Debugging > Debug Log File",
+      "Debug Log File",
+      "Writes this session's log, stamped with frame and emulated time, to a new file in the frontend's saves directory, and saves the machine state there if the game crashes. For testing homebrew. Takes effect when content is loaded.",
+      NULL,
+      "debug",
+      {
+         { "disabled", NULL },
+         { "enabled",  NULL },
          { NULL, NULL },
       },
       "disabled"

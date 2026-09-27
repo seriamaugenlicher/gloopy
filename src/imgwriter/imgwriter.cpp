@@ -2,9 +2,6 @@
 
 #include "png.h"
 
-#include <log/log.h>
-
-#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -13,34 +10,12 @@
 namespace ImageWriter
 {
 
-const double PRINT_ASPECT_CORRECTION_PRESCALE = 4;
-
-int parse_image_type(std::string type, int default_)
-{
-	std::transform(type.begin(), type.end(), type.begin(), [](unsigned char c) { return std::tolower(c); });
-	if (type == "bmp" || type == ".bmp" || type == "bitmap")
-	{
-		return IMAGE_TYPE_BMP;
-	}
-	if (type == "jpg" || type == "jpeg" || type == ".jpg" || type == ".jpeg")
-	{
-		return IMAGE_TYPE_JPG;
-	}
-	if (type == "png" || type == ".png")
-	{
-		return IMAGE_TYPE_PNG;
-	}
-	return default_;
-}
-
 fs::path image_extension(int image_type)
 {
-	//JPEG is not supported and falls back to PNG, so the extension always matches
-	//what is actually written
 	return image_type == IMAGE_TYPE_BMP ? fs::path{".bmp"} : fs::path{".png"};
 }
 
-fs::path make_unique_name(std::string prefix, std::string suffix)
+fs::path make_unique_name(std::string prefix)
 {
 	static unsigned int unique_number = 1;
 
@@ -48,7 +23,7 @@ fs::path make_unique_name(std::string prefix, std::string suffix)
 	char timestamp_buffer[20];
 	strftime(timestamp_buffer, sizeof(timestamp_buffer), "%Y%m%d_%H%M%S", std::localtime(&timestamp));
 
-	return prefix + timestamp_buffer + "_" + std::to_string(unique_number++) + suffix;
+	return prefix + timestamp_buffer + "_" + std::to_string(unique_number++);
 }
 
 //Write a 24-bit uncompressed BMP from ARGB8888 pixels (alpha dropped, as the
@@ -98,39 +73,8 @@ static bool save_bmp_24(fs::path path, uint32_t width, uint32_t height, const ui
 	return file.good();
 }
 
-//Nearest-neighbor resize, replacing SDL_BlitScaled in the original
-static std::vector<uint32_t> resize_nearest(
-	const uint32_t* data, uint32_t width, uint32_t height, uint32_t new_width, uint32_t new_height
-)
+static bool save_image_32bpp(int image_type, fs::path path, uint32_t width, uint32_t height, uint32_t data[])
 {
-	std::vector<uint32_t> out((size_t)new_width * new_height);
-	for (uint32_t y = 0; y < new_height; y++)
-	{
-		uint32_t src_y = (uint32_t)((uint64_t)y * height / new_height);
-		for (uint32_t x = 0; x < new_width; x++)
-		{
-			uint32_t src_x = (uint32_t)((uint64_t)x * width / new_width);
-			out[(size_t)y * new_width + x] = data[(size_t)src_y * width + src_x];
-		}
-	}
-	return out;
-}
-
-bool save_image_32bpp(
-	int image_type, fs::path path, uint32_t width, uint32_t height, uint32_t data[], bool _transparent,
-	double correct_aspect
-)
-{
-	if (correct_aspect > 0)
-	{
-		uint32_t scaled_height = (uint32_t)(height * PRINT_ASPECT_CORRECTION_PRESCALE);
-		uint32_t scaled_width = (uint32_t)(scaled_height * correct_aspect);
-		std::vector<uint32_t> scaled = resize_nearest(data, width, height, scaled_width, scaled_height);
-		Log::debug("Rescaling image from %dx%d -> %dx%d", width, height, scaled_width, scaled_height);
-		return image_type == IMAGE_TYPE_BMP ? save_bmp_24(path, scaled_width, scaled_height, scaled.data())
-											: save_png_24(path, scaled_width, scaled_height, scaled.data());
-	}
-
 	return image_type == IMAGE_TYPE_BMP ? save_bmp_24(path, width, height, data)
 										: save_png_24(path, width, height, data);
 }
@@ -144,27 +88,23 @@ static inline uint32_t color_16bpp_to_argb(uint16_t c)
 	return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
-bool save_image_16bpp(
-	int image_type, fs::path path, uint32_t width, uint32_t height, uint16_t data[], bool transparent,
-	double correct_aspect
-)
+bool save_image_16bpp(int image_type, fs::path path, uint32_t width, uint32_t height, uint16_t data[])
 {
 	unsigned int num_pixels = width * height;
 	std::vector<uint32_t> data_argb(num_pixels);
 
-	uint16_t alpha_set = transparent ? 0 : 0x8000;
-
+	//Seals are always opaque
 	for (unsigned int i = 0; i < num_pixels; i++)
 	{
-		data_argb[i] = color_16bpp_to_argb(data[i] | alpha_set);
+		data_argb[i] = color_16bpp_to_argb(data[i] | 0x8000);
 	}
 
-	return save_image_32bpp(image_type, path, width, height, data_argb.data(), transparent, correct_aspect);
+	return save_image_32bpp(image_type, path, width, height, data_argb.data());
 }
 
 bool save_image_8bpp(
 	int image_type, fs::path path, uint32_t width, uint32_t height, uint8_t data[], uint32_t num_colors,
-	uint16_t palette[], bool transparent, double correct_aspect
+	uint16_t palette[]
 )
 {
 	unsigned int num_pixels = width * height;
@@ -177,7 +117,7 @@ bool save_image_8bpp(
 		data_16bpp[i] = palette[pixel];
 	}
 
-	return save_image_16bpp(image_type, path, width, height, data_16bpp.data(), transparent, correct_aspect);
+	return save_image_16bpp(image_type, path, width, height, data_16bpp.data());
 }
 
 }  // namespace ImageWriter
